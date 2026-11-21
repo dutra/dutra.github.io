@@ -1,0 +1,781 @@
+---
+// The cluster lens simulator: Webb's image of Abell S1063 with an adjustable
+// lens model and several background galaxies drawn through it.
+//
+//  - src/lib/lens/model.ts      the mass model (physical parameters)
+//  - src/lib/lens/cosmology.ts  distances and lensing efficiency
+//  - src/lib/lens/field.ts      the deflection field on a grid, and readouts
+//  - src/lib/lens/trace.ts      critical curves and caustics from the field
+//  - src/lib/lens/renderer.ts   WebGL drawing of the lensed galaxies and maps
+//
+// This file is the page furniture: the controls, pointer handling and the
+// curve overlay. Controls are bound by their data-* attributes, so adding a
+// slider is one line of markup.
+import { Image } from 'astro:assets';
+import sky from '../assets/abell-s1063-webb.jpg';
+import { BCG, DEFAULT_MODEL, Z_LENS } from '../lib/lens/model';
+
+const m = DEFAULT_MODEL;
+---
+
+<section class="lab on-dark" data-lens-lab style={`--bcg-x:${BCG.x * 100}%;--bcg-y:${BCG.y * 100}%`}>
+  <div class="stage" data-stage>
+    <Image
+      class="sky"
+      src={sky}
+      alt="The galaxy cluster Abell S1063 observed with the James Webb Space Telescope."
+      widths={[960, 1600, 2400, 3200]}
+      sizes="max(100vw, 125vh)"
+      quality={74}
+      loading="eager"
+      data-sky
+    />
+    <canvas class="layer" data-gl aria-hidden="true"></canvas>
+    <canvas class="layer" data-overlay aria-hidden="true"></canvas>
+    <p class="notice" data-notice hidden></p>
+  </div>
+
+  <form class="panel" data-panel aria-label="Simulator controls" onsubmit="return false">
+    <header>
+      <p class="label">Abell S1063 · z = {Z_LENS}</p>
+      <h1 class="title">Cluster lens simulator</h1>
+      <p class="hint">
+        Drag a galaxy across the cluster. Each one sits behind it at its own redshift and is drawn through the lens.
+      </p>
+    </header>
+
+    <fieldset>
+      <legend>Background galaxies</legend>
+      <div class="chips" data-chips></div>
+      <label class="row">
+        <span>Redshift <output data-out="source.z"></output></span>
+        <input type="range" data-source="z" min="0.4" max="10" step="0.01" />
+      </label>
+      <label class="row">
+        <span>Size <output data-out="source.size"></output></span>
+        <input type="range" data-source="size" min="0.2" max="2.5" step="0.01" />
+      </label>
+      <div class="segmented" role="radiogroup" aria-label="What dragging sets">
+        <label><input type="radio" name="drag" value="source" checked /><span>Drag the galaxy</span></label>
+        <label><input type="radio" name="drag" value="image" /><span>Drag its image</span></label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Cluster</legend>
+      <label class="row">
+        <span>Halo velocity dispersion <output data-out="halo.sigma"></output></span>
+        <input type="range" data-model="halo.sigma" min="600" max="1600" step="10" value={m.halo.sigma} />
+      </label>
+      <label class="row">
+        <span>Core radius <output data-out="halo.core"></output></span>
+        <input type="range" data-model="halo.core" min="1" max="20" step="0.1" value={m.halo.core} />
+      </label>
+      <label class="row">
+        <span>Axis ratio <output data-out="halo.q"></output></span>
+        <input type="range" data-model="halo.q" min="0.4" max="0.99" step="0.01" value={m.halo.q} />
+      </label>
+      <label class="row">
+        <span>Orientation <output data-out="halo.angle"></output></span>
+        <input type="range" data-model="halo.angle" min="-90" max="90" step="1" value={m.halo.angle} />
+      </label>
+      <label class="row">
+        <span>Member galaxies <output data-out="memberSigma"></output></span>
+        <input type="range" data-model="memberSigma" min="0" max="350" step="5" value={m.memberSigma} />
+      </label>
+      <label class="check">
+        <input type="checkbox" data-model="halo2.on" />
+        <span>Second halo (drag ◆ to move it)</span>
+      </label>
+      <label class="row tool-row">
+        <span>Its velocity dispersion <output data-out="halo2.sigma"></output></span>
+        <input type="range" data-model="halo2.sigma" min="300" max="1200" step="10" value={m.halo2.sigma} />
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Display</legend>
+      <div class="checks">
+        <label class="check"><input type="checkbox" data-show="critical" checked /><span>Critical curves</span></label>
+        <label class="check"><input type="checkbox" data-show="caustic" checked /><span>Caustics</span></label>
+        <label class="check"><input type="checkbox" data-show="photo" checked /><span>Photograph</span></label>
+      </div>
+      <div class="segmented" role="radiogroup" aria-label="Map">
+        <label><input type="radio" name="map" value="0" checked /><span>No map</span></label>
+        <label><input type="radio" name="map" value="1" /><span>Convergence</span></label>
+        <label><input type="radio" name="map" value="2" /><span>Magnification</span></label>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>For the selected galaxy</legend>
+      <dl class="numbers">
+        <div><dt>D<sub>ls</sub>/D<sub>s</sub></dt><dd data-num="eff">–</dd></div>
+        <div><dt>Einstein radius</dt><dd data-num="thetaE">–</dd></div>
+        <div><dt>Mass inside it</dt><dd data-num="mass">–</dd></div>
+        <div><dt>Total magnification</dt><dd data-num="mu">–</dd></div>
+        <div><dt>Magnification at pointer</dt><dd data-num="muAt">–</dd></div>
+      </dl>
+      <p class="hint">Curves, maps and these numbers are for the selected galaxy's redshift.</p>
+    </fieldset>
+
+    <button type="button" class="reset" data-reset>Reset</button>
+  </form>
+</section>
+
+<script>
+  import { efficiency, einsteinMass, kpcPerArcsec } from '../lib/lens/cosmology';
+  import { LensField } from '../lib/lens/field';
+  import { ARCSEC_PER_WIDTH, BCG, DEFAULT_MODEL, IMAGE_ASPECT, Z_LENS, cloneModel, type Model } from '../lib/lens/model';
+  import { LensRenderer, MAX_SOURCES, type SourceView } from '../lib/lens/renderer';
+  import { traceCurves, type Curves } from '../lib/lens/trace';
+  import { setFrozen } from '../lib/controls';
+
+  type RGB = [number, number, number];
+  interface Source {
+    /** Source-plane position, width units from the BCG. */
+    x: number;
+    y: number;
+    z: number;
+    /** Scale radius, arcsec. */
+    size: number;
+    q: number;
+    angle: number;
+    seed: number;
+    disc: RGB;
+    knot: RGB;
+  }
+
+  // Colour, shape and starting place of each galaxy slot.
+  const SLOTS: Source[] = [
+    { x: 0.026, y: -0.012, z: 1.23, size: 1.0, q: 0.6, angle: 0.6, seed: 1.3, disc: [0.55, 0.75, 1], knot: [0.85, 0.93, 1] },
+    { x: -0.04, y: 0.034, z: 2.58, size: 0.9, q: 0.75, angle: 2.1, seed: 4.1, disc: [1, 0.5, 0.22], knot: [1, 0.86, 0.66] },
+    { x: 0.075, y: 0.06, z: 6.11, size: 0.5, q: 0.85, angle: 1.2, seed: 7.7, disc: [1, 0.27, 0.2], knot: [1, 0.62, 0.52] },
+    { x: -0.06, y: -0.05, z: 3.4, size: 0.8, q: 0.5, angle: 2.8, seed: 2.2, disc: [0.42, 1, 0.76], knot: [0.86, 1, 0.92] },
+  ];
+  const START_COUNT = 3;
+  const GRAB = 22; // how close, in CSS pixels, a press must be to pick up a handle
+
+  const css = (c: RGB, alpha = 1) => `rgba(${c.map((v) => Math.round(255 * v)).join(',')},${alpha})`;
+  const get = (obj: any, path: string) => path.split('.').reduce((o, k) => o[k], obj);
+  const set = (obj: any, path: string, value: unknown) => {
+    const keys = path.split('.');
+    const last = keys.pop()!;
+    keys.reduce((o, k) => o[k], obj)[last] = value;
+  };
+
+  const FORMAT: Record<string, (v: number) => string> = {
+    'source.z': (v) => v.toFixed(2),
+    'source.size': (v) => `${v.toFixed(2)}″`,
+    'halo.sigma': (v) => `${v} km/s`,
+    'halo.core': (v) => `${v.toFixed(1)}″`,
+    'halo.q': (v) => v.toFixed(2),
+    'halo.angle': (v) => `${v}°`,
+    memberSigma: (v) => (v ? `${v} km/s` : 'off'),
+    'halo2.sigma': (v) => `${v} km/s`,
+  };
+
+  async function init(root: HTMLElement) {
+    const stage = root.querySelector<HTMLElement>('[data-stage]')!;
+    const sky = root.querySelector<HTMLImageElement>('[data-sky]')!;
+    const glCanvas = root.querySelector<HTMLCanvasElement>('[data-gl]')!;
+    const overlay = root.querySelector<HTMLCanvasElement>('[data-overlay]')!;
+    const notice = root.querySelector<HTMLElement>('[data-notice]')!;
+    const panel = root.querySelector<HTMLFormElement>('[data-panel]')!;
+    const chips = root.querySelector<HTMLElement>('[data-chips]')!;
+    const ctx = overlay.getContext('2d')!;
+    const halo2Sigma = panel.querySelector<HTMLInputElement>('[data-model="halo2.sigma"]')!;
+
+    // --- state ------------------------------------------------------------------
+    let model: Model = cloneModel(DEFAULT_MODEL);
+    let sources: Source[] = SLOTS.slice(0, START_COUNT).map((s) => ({ ...s }));
+    let selected = 0;
+    let dragMode: 'source' | 'image' = 'source';
+    let map: 0 | 1 | 2 = 0;
+    const show = { critical: true, caustic: true, photo: true };
+    let curves: Curves | null = null;
+
+    // A phone gets a lighter grid; it shows less of the photograph anyway.
+    const field = new LensField(window.matchMedia('(max-width: 860px)').matches ? 640 : 1024);
+    let renderer: LensRenderer;
+    try {
+      renderer = new LensRenderer(glCanvas, field);
+    } catch {
+      notice.textContent = 'The simulator needs WebGL 2, which this browser does not provide.';
+      notice.hidden = false;
+      panel.inert = true;
+      return;
+    }
+    await field.buildMembers(model);
+
+    // --- view: where the photograph sits on the stage -----------------------------
+    const view = { width: 1, height: 1, originX: 0, originY: 0, scale: 1 };
+    function layout() {
+      const rect = stage.getBoundingClientRect();
+      view.width = rect.width;
+      view.height = rect.height;
+      // `object-fit: cover` with `object-position` at the BCG keeps the BCG at the same fraction of the stage.
+      view.scale = Math.max(rect.width, rect.height / IMAGE_ASPECT);
+      view.originX = rect.width * BCG.x;
+      view.originY = rect.height * BCG.y;
+      // Device pixels, held under about three million so large screens stay smooth.
+      const dpr = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(3e6 / (rect.width * rect.height)));
+      const w = Math.round(rect.width * dpr);
+      const h = Math.round(rect.height * dpr);
+      renderer.resize(w, h);
+      overlay.width = w;
+      overlay.height = h;
+      ctx.setTransform(w / rect.width, 0, 0, h / rect.height, 0, 0);
+      invalidate();
+    }
+    const toScreen = (x: number, y: number): [number, number] => [view.originX + x * view.scale, view.originY + y * view.scale];
+    const toLens = (px: number, py: number): [number, number] => [(px - view.originX) / view.scale, (py - view.originY) / view.scale];
+
+    // --- drawing ------------------------------------------------------------------
+    let fieldDirty = true;
+    let curvesDirty = true;
+    let queued = false;
+    function invalidate(what?: 'field' | 'curves') {
+      if (what === 'field') fieldDirty = true;
+      if (what) curvesDirty = true;
+      if (!queued) {
+        queued = true;
+        requestAnimationFrame(draw);
+      }
+    }
+
+    const effOf = (s: Source) => efficiency(Z_LENS, s.z);
+    const halo2Position = (): [number, number] => [model.halo2.x / ARCSEC_PER_WIDTH, model.halo2.y / ARCSEC_PER_WIDTH];
+
+    function strokeSegments(segments: Float32Array, style: string, width: number) {
+      ctx.strokeStyle = style;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      const { originX, originY, scale } = view;
+      for (let i = 0; i < segments.length; i += 4) {
+        ctx.moveTo(originX + segments[i] * scale, originY + segments[i + 1] * scale);
+        ctx.lineTo(originX + segments[i + 2] * scale, originY + segments[i + 3] * scale);
+      }
+      ctx.stroke();
+    }
+
+    function draw() {
+      queued = false;
+      const sel = sources[selected];
+      const eff = effOf(sel);
+      if (fieldDirty) {
+        field.update(model);
+        renderer.uploadField();
+        fieldDirty = false;
+      }
+      if (curvesDirty) {
+        curves = traceCurves(field, eff);
+        curvesDirty = false;
+        updateLensNumbers(eff, sel.z);
+      }
+
+      const views: SourceView[] = sources.map((s) => ({
+        x: s.x,
+        y: s.y,
+        eff: effOf(s),
+        size: s.size / ARCSEC_PER_WIDTH,
+        q: s.q,
+        angle: s.angle,
+        seed: s.seed,
+        disc: s.disc,
+        knot: s.knot,
+      }));
+      glCanvas.style.mixBlendMode = map ? 'normal' : 'screen';
+      renderer.render({ ...view, sources: views, map, mapEff: eff });
+
+      ctx.clearRect(0, 0, view.width, view.height);
+      ctx.lineCap = 'round';
+      if (curves && show.caustic) strokeSegments(curves.caustic, 'rgba(255,255,255,0.62)', 0.9);
+      if (curves && show.critical) strokeSegments(curves.critical, 'rgba(248,210,162,0.92)', 1.3);
+
+      // Handles: a numbered ring where each galaxy really is, and a diamond for the second halo.
+      ctx.font = '600 11px Inter Variable, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      sources.forEach((s, i) => {
+        const [px, py] = toScreen(s.x, s.y);
+        ctx.beginPath();
+        ctx.arc(px, py, i === selected ? 11 : 9, 0, 2 * Math.PI);
+        ctx.strokeStyle = css(s.disc, i === selected ? 1 : 0.7);
+        ctx.lineWidth = i === selected ? 2 : 1.2;
+        ctx.stroke();
+        ctx.fillStyle = css(s.disc);
+        ctx.fillText(String(i + 1), px + 18, py - 12);
+      });
+      if (model.halo2.on) {
+        const [px, py] = toScreen(...halo2Position());
+        ctx.beginPath();
+        ctx.moveTo(px, py - 9);
+        ctx.lineTo(px + 9, py);
+        ctx.lineTo(px, py + 9);
+        ctx.lineTo(px - 9, py);
+        ctx.closePath();
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+
+      const mu = eff > 0 ? field.totalMagnification(sel.x, sel.y, (0.6 * sel.size) / ARCSEC_PER_WIDTH, eff) : 1;
+      num('mu', `× ${mu < 10 ? mu.toFixed(1) : mu.toFixed(0)}`);
+    }
+
+    // --- numbers --------------------------------------------------------------------
+    const num = (key: string, text: string) => {
+      const el = panel.querySelector(`[data-num="${key}"]`);
+      if (el && el.textContent !== text) el.textContent = text;
+    };
+    function updateLensNumbers(eff: number, z: number) {
+      num('eff', eff.toFixed(3));
+      if (eff <= 0) {
+        num('thetaE', 'in front of the cluster');
+        num('mass', '–');
+        return;
+      }
+      const theta = field.einsteinRadius(eff) * ARCSEC_PER_WIDTH;
+      num('thetaE', theta > 0 ? `${theta.toFixed(1)}″ (${(theta * kpcPerArcsec(Z_LENS)).toFixed(0)} kpc)` : 'none');
+      num('mass', theta > 0 ? `${(einsteinMass(theta, Z_LENS, z) / 1e14).toFixed(2)} × 10¹⁴ M☉` : '–');
+    }
+
+    // --- controls -------------------------------------------------------------------
+    function syncOutputs() {
+      const sel = sources[selected];
+      panel.querySelectorAll<HTMLOutputElement>('[data-out]').forEach((out) => {
+        const key = out.dataset.out!;
+        const value = key.startsWith('source.') ? (sel as any)[key.slice(7)] : get(model, key);
+        out.textContent = FORMAT[key](Number(value));
+      });
+      panel.querySelectorAll<HTMLInputElement>('[data-source]').forEach((input) => {
+        input.value = String((sel as any)[input.dataset.source!]);
+      });
+      panel.querySelectorAll<HTMLInputElement>('[data-model]').forEach((input) => {
+        const value = get(model, input.dataset.model!);
+        if (input.type === 'checkbox') input.checked = Boolean(value);
+        else input.value = String(value);
+      });
+      // The second halo's slider stays in view; without the halo it is frozen, as on the project pages.
+      setFrozen(halo2Sigma, !model.halo2.on, 'Turn on the second halo to set it');
+    }
+
+    function renderChips() {
+      chips.replaceChildren(
+        ...sources.map((s, i) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'chip';
+          b.style.setProperty('--c', css(s.disc));
+          b.setAttribute('aria-pressed', String(i === selected));
+          b.textContent = `${i + 1} · z ${s.z.toFixed(2)}`;
+          b.addEventListener('click', () => select(i));
+          return b;
+        }),
+      );
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'chip ghost';
+      if (sources.length < MAX_SOURCES) {
+        edit.textContent = '+ Add';
+        edit.addEventListener('click', () => {
+          sources.push({ ...SLOTS[sources.length] });
+          select(sources.length - 1);
+        });
+        chips.append(edit);
+      }
+      if (sources.length > 1) {
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'chip ghost';
+        remove.textContent = '− Remove';
+        remove.addEventListener('click', () => {
+          sources.pop();
+          select(Math.min(selected, sources.length - 1));
+        });
+        chips.append(remove);
+      }
+    }
+
+    function select(i: number) {
+      selected = i;
+      renderChips();
+      syncOutputs();
+      invalidate('curves');
+    }
+
+    panel.addEventListener('input', (ev) => {
+      const input = ev.target as HTMLInputElement;
+      if (input.dataset.source) {
+        (sources[selected] as any)[input.dataset.source] = Number(input.value);
+        if (input.dataset.source === 'z') renderChips();
+        syncOutputs();
+        invalidate(input.dataset.source === 'z' ? 'curves' : undefined);
+      } else if (input.dataset.model) {
+        set(model, input.dataset.model, input.type === 'checkbox' ? input.checked : Number(input.value));
+        syncOutputs();
+        invalidate('field');
+      } else if (input.dataset.show) {
+        show[input.dataset.show as keyof typeof show] = input.checked;
+        sky.style.opacity = show.photo ? '' : '0';
+        invalidate();
+      } else if (input.name === 'map') {
+        map = Number(input.value) as 0 | 1 | 2;
+        invalidate();
+      } else if (input.name === 'drag') {
+        dragMode = input.value as 'source' | 'image';
+      }
+    });
+
+    root.querySelector('[data-reset]')!.addEventListener('click', () => {
+      model = cloneModel(DEFAULT_MODEL);
+      sources = SLOTS.slice(0, START_COUNT).map((s) => ({ ...s }));
+      selected = 0;
+      renderChips();
+      syncOutputs();
+      invalidate('field');
+    });
+
+    // --- pointer ----------------------------------------------------------------------
+    let dragging: 'source' | 'halo2' | null = null;
+    const local = (ev: PointerEvent): [number, number] => {
+      const rect = stage.getBoundingClientRect();
+      return [ev.clientX - rect.left, ev.clientY - rect.top];
+    };
+    const near = (px: number, py: number, x: number, y: number) => {
+      const [sx, sy] = toScreen(x, y);
+      return Math.hypot(px - sx, py - sy);
+    };
+
+    function moveTo(px: number, py: number) {
+      const [x, y] = toLens(px, py);
+      if (dragging === 'halo2') {
+        model.halo2.x = x * ARCSEC_PER_WIDTH;
+        model.halo2.y = y * ARCSEC_PER_WIDTH;
+        invalidate('field');
+        return;
+      }
+      const s = sources[selected];
+      if (dragMode === 'image') {
+        // Put the galaxy where the ray through the pointer comes from, so an image sits under the pointer.
+        const a = [0, 0];
+        field.sample(x, y, a);
+        const eff = effOf(s);
+        s.x = x - eff * a[0];
+        s.y = y - eff * a[1];
+      } else {
+        s.x = x;
+        s.y = y;
+      }
+      invalidate();
+    }
+
+    stage.addEventListener('pointerdown', (ev) => {
+      const [px, py] = local(ev);
+      dragging = 'source';
+      if (model.halo2.on && near(px, py, ...halo2Position()) < GRAB) {
+        dragging = 'halo2';
+      } else {
+        // Pressing on another galaxy's ring picks that galaxy up instead.
+        let best = GRAB;
+        sources.forEach((s, i) => {
+          const d = near(px, py, s.x, s.y);
+          if (d < best) {
+            best = d;
+            if (i !== selected) select(i);
+          }
+        });
+      }
+      stage.setPointerCapture(ev.pointerId);
+      moveTo(px, py);
+    });
+    stage.addEventListener('pointermove', (ev) => {
+      const [px, py] = local(ev);
+      if (dragging) moveTo(px, py);
+      const [x, y] = toLens(px, py);
+      const det = field.detAt(x, y, effOf(sources[selected]));
+      const mu = 1 / Math.abs(det);
+      num('muAt', `${det < 0 ? '−' : ''}${mu > 999 ? '> 999' : mu < 10 ? mu.toFixed(1) : mu.toFixed(0)}`);
+    });
+    const release = () => (dragging = null);
+    stage.addEventListener('pointerup', release);
+    stage.addEventListener('pointercancel', release);
+    stage.addEventListener('pointerleave', () => num('muAt', '–'));
+
+    glCanvas.addEventListener('webglcontextlost', (ev) => ev.preventDefault());
+    glCanvas.addEventListener('webglcontextrestored', () => {
+      renderer.setup();
+      invalidate();
+    });
+
+    renderChips();
+    syncOutputs();
+    new ResizeObserver(layout).observe(stage);
+    layout();
+    root.setAttribute('data-live', '');
+  }
+
+  document.querySelectorAll<HTMLElement>('[data-lens-lab]').forEach(init);
+</script>
+
+<style>
+  .lab {
+    position: relative;
+    background: #05050a;
+  }
+  .stage {
+    position: relative;
+    height: max(100svh, 640px);
+    overflow: hidden;
+    cursor: crosshair;
+    touch-action: none;
+    user-select: none;
+  }
+  .sky,
+  .layer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .sky {
+    object-fit: cover;
+    object-position: var(--bcg-x) var(--bcg-y);
+    filter: brightness(0.9);
+    transition: opacity 0.2s ease;
+  }
+  .layer {
+    pointer-events: none;
+  }
+  .notice {
+    position: absolute;
+    inset: auto 0 40px 0;
+    margin: auto;
+    width: fit-content;
+    max-width: 80%;
+    padding: 12px 18px;
+    border-radius: 10px;
+    background: rgba(7, 7, 12, 0.85);
+    font-family: var(--font-ui);
+    font-size: 14px;
+  }
+
+  .panel {
+    position: absolute;
+    top: 84px;
+    left: clamp(16px, 2.5vw, 36px);
+    width: 318px;
+    max-height: calc(100% - 108px);
+    overflow-y: auto;
+    display: grid;
+    gap: 18px;
+    padding: 20px 20px 22px;
+    border: 1px solid var(--line-strong);
+    border-radius: 16px;
+    background: rgba(9, 9, 15, 0.8);
+    backdrop-filter: blur(16px) saturate(1.2);
+    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--ink-soft);
+    scrollbar-width: thin;
+  }
+  .title {
+    margin-top: 8px;
+    font-size: 1.55rem;
+    color: var(--ink);
+  }
+  .hint {
+    margin-top: 8px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  fieldset {
+    display: grid;
+    gap: 12px;
+    margin: 0;
+    padding: 14px 0 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+    min-width: 0;
+  }
+  legend {
+    float: left;
+    width: 100%;
+    padding: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--amber);
+  }
+  .row {
+    display: grid;
+    gap: 5px;
+  }
+  .row span {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  output {
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  /* A slider frozen with setFrozen (src/lib/controls.ts), which needs the .tool-row class on the row.
+     The same rules as in src/styles/tools.css, which this page does not load; the panel's dark
+     tokens (.on-dark) give the muted colour. */
+  .row[data-frozen] {
+    color: var(--muted);
+    cursor: not-allowed;
+  }
+  .row[data-frozen] output {
+    color: var(--muted);
+  }
+  .row[data-frozen] input[type='range'] {
+    accent-color: var(--muted);
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  /* The panel is narrower than the project pages' one: tighten the gaps so the name, the tag and
+     the value stay on one line. */
+  .row[data-frozen] > span {
+    gap: 8px;
+  }
+  .row > span > :global(.tool-fixed) {
+    margin-right: auto;
+    align-self: center;
+    white-space: nowrap;
+    padding: 1px 6px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  input[type='range'] {
+    width: 100%;
+    margin: 0;
+    accent-color: var(--amber);
+  }
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+  }
+  .check input {
+    accent-color: var(--amber);
+  }
+  .checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .chips :global(.chip) {
+    padding: 6px 11px;
+    border: 1px solid var(--c, var(--line-strong));
+    border-radius: 999px;
+    background: transparent;
+    color: var(--c, var(--ink-soft));
+    font: 600 12px var(--font-ui);
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+  }
+  .chips :global(.chip[aria-pressed='true']) {
+    background: var(--c);
+    color: #0b0b12;
+  }
+  .chips :global(.chip.ghost) {
+    border-style: dashed;
+  }
+
+  .segmented {
+    display: flex;
+    border: 1px solid var(--line-strong);
+    border-radius: 9px;
+    overflow: hidden;
+  }
+  .segmented label {
+    flex: 1;
+    cursor: pointer;
+  }
+  .segmented input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .segmented span {
+    display: block;
+    padding: 7px 6px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .segmented input:checked + span {
+    background: var(--amber);
+    color: #1d1206;
+  }
+  .segmented input:focus-visible + span {
+    outline: 2px solid var(--arc);
+    outline-offset: -2px;
+  }
+
+  .numbers {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+  }
+  .numbers div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .numbers dd {
+    margin: 0;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+  .reset {
+    justify-self: start;
+    padding: 8px 16px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink);
+    font: 600 12px var(--font-ui);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  .reset:hover {
+    border-color: var(--amber);
+  }
+
+  @media (max-width: 860px) {
+    .stage {
+      height: 62svh;
+      min-height: 380px;
+    }
+    .panel {
+      position: static;
+      width: auto;
+      max-height: none;
+      border-radius: 0;
+      border-width: 1px 0 0;
+      background: #0b0b12;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+  }
+</style>
