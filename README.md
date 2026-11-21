@@ -43,4 +43,6 @@ Personal site of Isaque Dutra, built with [Astro](https://astro.build) as a full
 - `src/styles/global.css` — colours, type and shared styles.
 - `src/lib/moon.ts` — the footer moon phase, computed in the browser from the date.
 
-Deploy `dist/` to any static host.
+## Deploying
+
+`.github/workflows/deploy.yml` builds the site and publishes it to GitHub Pages on every push to `main` (the repository is `dutra/dutra.github.io`, served at `https://dutra.github.io`). The workflow passes the Pages address as `SITE_URL`, which `astro.config.mjs` uses for canonical links and the sitemap; without it the site address is `https://dutra.cc`. `dist/` can also be deployed to any static host.
