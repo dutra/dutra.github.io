@@ -1,0 +1,1006 @@
+---
+// Galaxy-galaxy strong lensing by one cluster member. The physics is in
+// src/lib/ggsl.ts; this page holds the controls, the two sky views (image and
+// source plane) and the cross-section chart.
+//
+// Controls are bound by their data-* attributes: a slider with data-param="x"
+// sets state.x, and the <output data-out="x"> next to it shows the value. Every
+// change goes through invalidate(), which redraws once on the next animation
+// frame. The chart is the expensive part (about a hundred lens models), so it
+// is recomputed after the sliders have been still for a moment, a few models
+// per task so the page stays responsive.
+import Base from '../../layouts/Base.astro';
+import '../../styles/tools.css';
+---
+
+<Base
+  title="Galaxy-galaxy strong lensing"
+  description="An interactive model of a cluster member galaxy acting as a strong lens inside a galaxy cluster, showing how the cluster's convergence and shear and the galaxy's mass set the area enclosed by its tangential caustic, and how much less its core radius matters."
+>
+  <div class="tool" data-ggsl>
+    <div class="tool-head">
+      <a class="tool-back" href="/projects/">Projects</a>
+      <h1>Galaxy-galaxy strong lensing</h1>
+      <p class="intro">
+        A galaxy inside a cluster can be a strong lens in its own right, splitting a background galaxy into several images
+        within a few arcseconds of itself. Change the galaxy and the cluster around it, drag the background source, and see
+        how the area enclosed by the galaxy's tangential caustic grows and shrinks.
+      </p>
+    </div>
+
+    <div class="tool-body">
+      <form class="tool-panel" data-panel aria-label="Model controls" onsubmit="return false">
+        <fieldset>
+          <legend>Presets</legend>
+          <div class="tool-buttons">
+            <button type="button" class="tool-button" data-preset="cluster" aria-pressed="true">Typical member</button>
+            <button type="button" class="tool-button" data-preset="shear" aria-pressed="false">Strong shear</button>
+            <button type="button" class="tool-button" data-preset="compact" aria-pressed="false">Compact member (small core)</button>
+            <button type="button" class="tool-button" data-preset="diffuse" aria-pressed="false">Diffuse member</button>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Member galaxy</legend>
+          <div class="tool-models" role="radiogroup" aria-label="Galaxy profile">
+            <label><input type="radio" name="ggsl-profile" value="sis" data-model="profile" /><span>Singular isothermal</span></label>
+            <label><input type="radio" name="ggsl-profile" value="cored" data-model="profile" /><span>Cored isothermal</span></label>
+            <label><input type="radio" name="ggsl-profile" value="dpie" data-model="profile" checked /><span>Truncated (dPIE)</span></label>
+          </div>
+          <label class="tool-row">
+            <span>Velocity dispersion <output data-out="sigma"></output></span>
+            <input type="range" data-param="sigma" min="80" max="350" step="5" value="180" />
+          </label>
+          <label class="tool-row">
+            <span>Core radius <output data-out="core"></output></span>
+            <input type="range" data-param="core" min="0.05" max="2" step="0.05" value="0.5" />
+          </label>
+          <label class="tool-row">
+            <span>Truncation radius <output data-out="cut"></output></span>
+            <input type="range" data-param="cut" min="2" max="60" step="1" value="19" />
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Cluster and source</legend>
+          <div class="tool-models" role="radiogroup" aria-label="Environment">
+            <label><input type="radio" name="ggsl-env" value="isolated" data-model="env" /><span>Isolated</span></label>
+            <label><input type="radio" name="ggsl-env" value="cluster" data-model="env" checked /><span>In a cluster</span></label>
+          </div>
+          <label class="tool-row">
+            <span><span>Cluster convergence κ<sub>c</sub></span> <output data-out="kappa"></output></span>
+            <input type="range" data-param="kappa" min="0" max="0.85" step="0.01" value="0.6" />
+          </label>
+          <label class="tool-row">
+            <span><span>Cluster shear γ<sub>c</sub></span> <output data-out="gamma"></output></span>
+            <input type="range" data-param="gamma" min="0" max="0.35" step="0.01" value="0.15" />
+          </label>
+          <p class="note">
+            Near the limit κ<sub>c</sub> + γ<sub>c</sub> = 0.95 the critical curves reach several arcseconds and the outer
+            images tens of arcseconds, further than a constant κ<sub>c</sub> and γ<sub>c</sub> describes a real cluster.
+          </p>
+          <label class="tool-row">
+            <span>Source redshift <output data-out="zs"></output></span>
+            <input type="range" data-param="zs" min="0.5" max="8" step="0.05" value="2" />
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Results</legend>
+          <dl class="tool-numbers">
+            <div><dt>GGSL cross-section</dt><dd data-num="cross">–</dd></div>
+            <div><dt>Area with three or more images</dt><dd data-num="multi">–</dd></div>
+            <div><dt>Einstein radius</dt><dd data-num="thetaE">–</dd></div>
+            <div><dt>Einstein radius in isolation</dt><dd data-num="thetaIso">–</dd></div>
+            <div><dt>Galaxy mass</dt><dd data-num="mass">–</dd></div>
+            <div><dt>D<sub>ls</sub>/D<sub>s</sub></dt><dd data-num="eff">–</dd></div>
+          </dl>
+          <p class="note" data-status aria-live="polite" hidden></p>
+        </fieldset>
+
+        <div class="tool-buttons">
+          <button type="button" class="tool-button" data-reset>Reset</button>
+        </div>
+      </form>
+
+      <div class="tool-figures">
+        <div class="pair">
+          <figure class="tool-figure">
+            <figcaption>Image plane: lensed images and critical curves</figcaption>
+            <canvas
+              class="sky"
+              data-image
+              tabindex="0"
+              role="img"
+              aria-label="Image plane around the member galaxy, showing the lensed images of the background galaxy and the tangential and radial critical curves. Drag, or use the arrow keys, to move the source."
+            ></canvas>
+          </figure>
+          <figure class="tool-figure">
+            <figcaption>Source plane: caustics and GGSL cross-section</figcaption>
+            <canvas
+              class="sky"
+              data-source
+              tabindex="0"
+              role="img"
+              aria-label="Source plane, showing the tangential caustic and the radial caustic (for the singular profile, its cut), the area inside the tangential caustic, the rest of the region where the background galaxy has three or more images, and the galaxy itself. Drag, or use the arrow keys, to move it."
+            ></canvas>
+          </figure>
+        </div>
+        <p class="hint">
+          Drag the background galaxy (a circular Gaussian with a standard deviation of 0.03″) in either panel, or focus one
+          and use the arrow keys. Solid lines are the tangential critical curve (amber) and caustic (white); dashed lines
+          are the radial ones, or for the singular profile, which has no radial critical curve, its cut (the image of the
+          galaxy's centre, a circle in the source plane; crossing it adds or removes one image). The strongly
+          shaded area inside the tangential caustic is the GGSL cross-section, and the faint shading is the rest of the area
+          with three or more images. Where a dotted box is drawn in the source plane, the source is kept inside it so that
+          all of its images stay in the image-plane view.
+        </p>
+        <figure class="tool-figure">
+          <figcaption>GGSL cross-section against velocity dispersion</figcaption>
+          <canvas
+            class="chart"
+            data-chart
+            role="img"
+            aria-label="Chart of the galaxy-galaxy strong lensing cross-section, the area inside the tangential caustic, against the member's velocity dispersion, for the galaxy in the current cluster field and for versions with its core radius halved and doubled."
+          ></canvas>
+          <p class="note" data-chart-note hidden>
+            The singular profile has no core, so there are no core-halved or core-doubled curves to compare with.
+          </p>
+        </figure>
+      </div>
+    </div>
+
+    <div class="tool-notes">
+      <h2>What this shows</h2>
+      <p>
+        Following Meneghetti et al. (2020), the GGSL cross-section here is the area of the source plane enclosed by the
+        galaxy's tangential caustic. That caustic opens only when something breaks the galaxy's circular symmetry. For a
+        round galaxy with no external shear, every point of its tangential critical curve (the Einstein ring) maps to the
+        same point behind the galaxy, so the caustic is a single point and the cross-section is exactly 0 arcsec²; the
+        Isolated environment shows this. Inside a cluster, the cluster's shear stretches that point into a diamond with
+        four cusps. The ellipticity of real galaxies opens the caustic too, but this round model leaves it out, so here all
+        of the cross-section comes from the cluster's shear.
+      </p>
+      <p>
+        The cluster's convergence and shear also bring the galaxy closer to the critical density for lensing. As
+        κ<sub>c</sub> + γ<sub>c</sub> approaches 1 the galaxy approaches the cluster's own critical curve, and the
+        cross-section grows steeply: for the default galaxy with γ<sub>c</sub> = 0.15 it is 0.031 arcsec² at κ<sub>c</sub> = 0,
+        0.213 arcsec² at κ<sub>c</sub> = 0.6 and 0.93 arcsec² at κ<sub>c</sub> = 0.8. Compactness matters less. At the same
+        mass (the same velocity dispersion and truncation radius), shrinking the core from 1.5 kpc to 0.1 kpc raises the
+        cross-section only from 0.167 arcsec² to 0.231 arcsec², while raising the velocity dispersion from 120 km/s to 280
+        km/s takes it from 0.045 arcsec² to 0.87 arcsec²; the core matters most for the least massive galaxies, as the
+        chart shows. The profile selector makes the same comparison: at 180 km/s in the default field (κ<sub>c</sub> = 0.6,
+        γ<sub>c</sub> = 0.15) the cross-section is 0.365 arcsec² for the singular isothermal sphere, 0.326 arcsec² for
+        the cored one (0.5 kpc core) and 0.213 arcsec² for the truncated one (0.5 kpc core, 19 kpc truncation radius), so
+        removing the core adds about 12% while truncating the halo removes about a third. Because the cross-section
+        depends on how much mass a galaxy holds near its centre, counts of galaxy-galaxy strong lensing events in clusters
+        are a probe of how dark matter is distributed in cluster galaxies.
+      </p>
+      <p>
+        The area with three or more images is a different number. It also counts the sources inside the radial caustic,
+        which have three images even when they lie outside the tangential caustic (sources inside both have five). With the defaults, the tangential caustic
+        encloses 0.213 arcsec² while three or more images occur over 0.431 arcsec². The radial caustic is far more
+        sensitive to the core than the tangential one: the area with three or more images is 0.888 arcsec² with a 0.1 kpc core and 0.177
+        arcsec² with a 1.5 kpc core.
+      </p>
+
+      <h2>Model and assumptions</h2>
+      <p>
+        By default the member galaxy is a dual pseudo-isothermal sphere (dPIE): a projected density that is flat inside the core radius,
+        falls as 1/r like an isothermal sphere in between, and steepens to 1/r³ beyond the truncation radius. Its velocity
+        dispersion σ is the equivalent singular isothermal value, defined by the lensing strength 4π(σ/c)²
+        D<sub>ls</sub>/D<sub>s</sub>. Lenstool's σ<sub>dPIE</sub> (Elíasdóttir et al. 2007) is related to it by σ² = (3/2)
+        σ<sub>dPIE</sub>² (1 − r<sub>core</sub>²/r<sub>cut</sub>²), so 180 km/s here is about 147 km/s there for the
+        default radii. The total mass is πσ²r<sub>cut</sub>/G, which does not depend on the core radius. The galaxy sits at
+        the redshift of Abell S1063, z = 0.348.
+      </p>
+      <p>
+        The galaxy profile selector offers three cases of this profile. The singular isothermal sphere fixes the core
+        radius at 0 and the truncation radius at infinity: its density falls as 1/r all the way in, its deflection is the
+        same, 4π(σ/c)² D<sub>ls</sub>/D<sub>s</sub>, at every radius, and it has no radial critical curve (the galaxy's
+        centre maps instead to a circle, the cut). The cored isothermal sphere keeps the core but fixes the truncation
+        radius at infinity. The truncated profile, the dPIE, lets both vary. Without truncation the mass is infinite, so
+        the mass readout is shown only for the dPIE. The Isolated environment fixes κ<sub>c</sub> and γ<sub>c</sub> at 0.
+      </p>
+      <p>
+        Over the few arcseconds around the galaxy, the cluster is treated as a constant convergence κ<sub>c</sub> and a
+        constant shear γ<sub>c</sub>, both given for the chosen source redshift. The shear stretches images along the
+        horizontal axis, as if the cluster centre lay above or below the frame. κ<sub>c</sub> + γ<sub>c</sub> is kept at or
+        below 0.95, so the galaxy lies outside the cluster's own critical curve; the shear slider's range shrinks as the
+        convergence grows. Close to that limit the galaxy's critical curves grow to several arcseconds and its outer images
+        lie tens of arcseconds away, where a constant κ<sub>c</sub> and γ<sub>c</sub> is no longer a fair description of a
+        cluster. The Einstein radius is where the mean convergence inside a circle, cluster included, reaches 1.
+      </p>
+      <p>
+        The lensing Jacobian has two eigenvalues, 1 − κ − |γ| (tangential) and 1 − κ + |γ| (radial), where κ and γ are the
+        total convergence and shear of galaxy and cluster. Each is contoured separately on a fine polar mesh of the image
+        plane to give the tangential and radial critical curves, which are mapped to the source plane to give the caustics.
+        The cross-section is the area of the points that the tangential caustic winds around, summed along 2048 scan lines.
+        The area with three or more images is measured by mapping the mesh triangles to the source plane and counting, at
+        each point of a grid around the caustics, how many land on it. The chart uses a coarser mesh than the readouts, and
+        its marker is computed on that same mesh, so it can differ from the readout by about 0.1%. The background galaxy is
+        a circular Gaussian with a standard deviation of 0.03″. Distances use a flat ΛCDM cosmology with H<sub>0</sub> = 70 km/s/Mpc
+        and Ω<sub>m</sub> = 0.3. This is an illustration of the physics, not a model of a particular galaxy.
+      </p>
+
+      <h2>References</h2>
+      <p>
+        <a href="https://arxiv.org/abs/0710.5636">Elíasdóttir et al. 2007</a> (arXiv:0710.5636), on the dPIE profile in
+        cluster lens models. <a href="https://arxiv.org/abs/2009.04471">Meneghetti et al. 2020</a>, Science 369, 1347
+        (arXiv:2009.04471), on the excess of galaxy-galaxy strong lensing in observed clusters over simulations. See also{' '}
+        <a href="https://arxiv.org/abs/2406.17024">Dutra, Natarajan and Gilman 2025</a>, on steeper member profiles and
+        this discrepancy.
+      </p>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+  }
+  @media (max-width: 560px) {
+    .pair {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+  /* The sky views stay dark in both themes. */
+  .tool-figure canvas.sky {
+    height: auto;
+    aspect-ratio: 1 / 1;
+    border-radius: 8px;
+    background: #05050a;
+    touch-action: none;
+    cursor: grab;
+  }
+  .tool-figure canvas.sky:active {
+    cursor: grabbing;
+  }
+  .tool-figure canvas.chart {
+    height: 320px;
+  }
+  .hint,
+  .note {
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+  .hint {
+    margin-top: -6px;
+  }
+  .note {
+    margin: 4px 0 0;
+  }
+  .tool-numbers dd {
+    white-space: nowrap;
+  }
+  .note[hidden] {
+    display: none;
+  }
+  .tool-row sub,
+  .tool-numbers sub,
+  .note sub {
+    line-height: 0;
+  }
+</style>
+
+<script>
+  import {
+    COARSE,
+    FINE,
+    analyse,
+    crossSection,
+    dpieMass,
+    einsteinRadius,
+    makeLens,
+    viewsFor,
+    type Analysis,
+    type Curve,
+    type Lens,
+  } from '../../lib/ggsl';
+  import { efficiency, kpcPerArcsec, sisEinsteinRadius } from '../../lib/lens/cosmology';
+  import { Z_LENS } from '../../lib/lens/model';
+  import { setFrozen } from '../../lib/controls';
+  import { Plot, SERIES } from '../../lib/plot';
+
+  // --- state --------------------------------------------------------------------
+  /** Galaxy profile: singular isothermal, cored isothermal, or truncated (dPIE). */
+  type Profile = 'sis' | 'cored' | 'dpie';
+  /** Environment: isolated (no cluster field) or in a cluster. */
+  type Env = 'isolated' | 'cluster';
+  /**
+   * The sliders' values. A slider frozen by the chosen model keeps its last
+   * free value here, so it comes back when the slider is released; model()
+   * gives the values the lens actually uses.
+   */
+  interface Params {
+    /** km/s */
+    sigma: number;
+    /** Core and truncation radius, kpc. */
+    core: number;
+    cut: number;
+    kappa: number;
+    gamma: number;
+    zs: number;
+  }
+  interface State extends Params {
+    profile: Profile;
+    env: Env;
+  }
+  type Key = keyof Params;
+
+  const PRESETS: Record<string, State> = {
+    cluster: { profile: 'dpie', env: 'cluster', sigma: 180, core: 0.5, cut: 19, kappa: 0.6, gamma: 0.15, zs: 2 },
+    // Shear is what opens the tangential caustic.
+    shear: { profile: 'dpie', env: 'cluster', sigma: 180, core: 0.5, cut: 19, kappa: 0.5, gamma: 0.35, zs: 2 },
+    // Same velocity dispersion and truncation radius (so the same mass); only the core differs.
+    compact: { profile: 'dpie', env: 'cluster', sigma: 180, core: 0.1, cut: 19, kappa: 0.6, gamma: 0.15, zs: 2 },
+    diffuse: { profile: 'dpie', env: 'cluster', sigma: 180, core: 1.5, cut: 19, kappa: 0.6, gamma: 0.15, zs: 2 },
+  };
+  const DEFAULT = PRESETS.cluster;
+  const KEYS: (keyof State)[] = ['profile', 'env', 'sigma', 'core', 'cut', 'kappa', 'gamma', 'zs'];
+
+  const FORMAT: Record<Key, (v: number) => string> = {
+    sigma: (v) => `${v} km/s`,
+    core: (v) => `${v.toFixed(2)} kpc`,
+    cut: (v) => `${v} kpc`,
+    kappa: (v) => v.toFixed(2),
+    gamma: (v) => v.toFixed(2),
+    zs: (v) => v.toFixed(2),
+  };
+
+  /** What each model fixes: the value the lens uses, where the slider sits, its text, and why. */
+  interface Fixed {
+    value: number;
+    at: 'min' | 'max';
+    text: string;
+    reason: string;
+  }
+  function fixedBy(s: State, key: Key): Fixed | null {
+    if (key === 'core' && s.profile === 'sis') return { value: 0, at: 'min', text: '0 kpc', reason: 'The singular isothermal profile has no core' };
+    if (key === 'cut' && s.profile !== 'dpie') return { value: Infinity, at: 'max', text: '∞', reason: 'This profile is not truncated' };
+    if ((key === 'kappa' || key === 'gamma') && s.env === 'isolated')
+      return { value: 0, at: 'min', text: FORMAT[key](0), reason: 'An isolated galaxy has no cluster convergence or shear' };
+    return null;
+  }
+  /** The parameters the lens uses, with the model's fixed values in place. */
+  function model(s: State): Params {
+    const m = { ...s };
+    for (const key of ['core', 'cut', 'kappa', 'gamma'] as Key[]) {
+      const f = fixedBy(s, key);
+      if (f) m[key] = f.value;
+    }
+    return m;
+  }
+
+  /** Proper kpc per arcsec at the cluster. */
+  const KPC = kpcPerArcsec(Z_LENS);
+  /** The chart's velocity dispersions, km/s. */
+  const CHART_SIGMAS = Array.from({ length: 28 }, (_, i) => 80 + 10 * i);
+  /** Shear limit that keeps kappa + gamma below 0.95. */
+  const gammaMax = (kappa: number) => Math.min(0.5, Math.round((0.95 - kappa) * 100) / 100);
+  /** Gaussian width (standard deviation) of the background galaxy, arcsec. Fixed, so it does not depend on the view. */
+  const SRC_WIDTH = 0.03;
+
+  const ARROWS: Record<string, [number, number] | undefined> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };
+  const SCALE_BARS = [0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10, 20];
+
+  // Colours of the sky views (dark in both themes).
+  const CRITICAL = 'rgba(248,210,162,0.95)';
+  const CAUSTIC = 'rgba(255,255,255,0.85)';
+  const INSIDE_TANGENTIAL = 'rgba(240,183,117,0.42)';
+  const SOURCE_RGB: [number, number, number] = [156, 201, 255];
+
+  /** Number in the form 4.5 × 10¹¹. */
+  const SUP = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+  function sci(v: number): string {
+    const e = Math.floor(Math.log10(v));
+    const m = v / 10 ** e;
+    return `${m.toFixed(1)} × 10${String(e).replace(/\d/g, (d) => SUP[Number(d)])}`;
+  }
+  const sig3 = (v: number) => (v >= 100 ? v.toFixed(0) : v.toPrecision(3));
+  const area = (v: number) => `${v > 0 ? sig3(v) : '0'} arcsec²`;
+
+  function init(root: HTMLElement) {
+    const panel = root.querySelector<HTMLFormElement>('[data-panel]')!;
+    const imageCanvas = root.querySelector<HTMLCanvasElement>('[data-image]')!;
+    const sourceCanvas = root.querySelector<HTMLCanvasElement>('[data-source]')!;
+    const chartCanvas = root.querySelector<HTMLCanvasElement>('[data-chart]')!;
+    const chartNote = root.querySelector<HTMLElement>('[data-chart-note]')!;
+    const status = panel.querySelector<HTMLElement>('[data-status]')!;
+    const ictx = imageCanvas.getContext('2d')!;
+    const sctx = sourceCanvas.getContext('2d')!;
+    const inputs = [...panel.querySelectorAll<HTMLInputElement>('[data-param]')];
+    const radios = [...panel.querySelectorAll<HTMLInputElement>('[data-model]')];
+    const presetButtons = [...panel.querySelectorAll<HTMLButtonElement>('[data-preset]')];
+    const fontUi = getComputedStyle(root).getPropertyValue('--font-ui').trim() || 'system-ui, sans-serif';
+    const chartLabel = chartCanvas.getAttribute('aria-label') ?? '';
+
+    const state: State = { ...DEFAULT };
+    /**
+     * Where the source was last put, arcsec; null until the first model sets it.
+     * The source is drawn at this point clamped to the current model's box, so a
+     * model that shrinks the box does not lose the position.
+     */
+    let wanted: { x: number; y: number } | null = null;
+    let src = { x: 0, y: 0 };
+
+    // --- derived model, rebuilt when a control changes --------------------------------
+    let eff = 0;
+    let lens: Lens;
+    let an: Analysis;
+    /** Cross-section at the current sigma on the chart's mesh, for the chart's marker. */
+    let chartCross = 0;
+    let isoKey = '';
+    let isoTheta = 0;
+    let imgHalf = 1;
+    let srcHalf = 1;
+    /** How far the source may go from the member, arcsec, so that all its images stay in the image-plane view. */
+    let limX = 1;
+    let limY = 1;
+
+    // Inverse ray shooting for the image plane: each cell of an N × N grid is
+    // mapped to the source plane once per model; each frame only evaluates the
+    // source's brightness there.
+    const N = 300;
+    const rayX = new Float32Array(N * N);
+    const rayY = new Float32Array(N * N);
+    // Variance added to the source's width at each cell: a cell of side h maps to
+    // a patch of the source plane with covariance (h²/12) A Aᵀ, here taken as
+    // round. It keeps images that are thinner than a cell from flickering.
+    const rayBlur = new Float32Array(N * N);
+    const imageBuffer = document.createElement('canvas');
+    imageBuffer.width = imageBuffer.height = N;
+    const bctx = imageBuffer.getContext('2d')!;
+    const pixels = bctx.createImageData(N, N);
+    // The area with three or more images, one pixel per multiplicity cell.
+    const regionBuffer = document.createElement('canvas');
+    const rctx = regionBuffer.getContext('2d')!;
+
+    /** The lens for a state, with the model's fixed values, optionally at another sigma or core (kpc). */
+    function lensFor(s: State, at: { sigma?: number; core?: number } = {}): Lens {
+      const m = model(s);
+      return makeLens({
+        b: sisEinsteinRadius(at.sigma ?? m.sigma) * efficiency(Z_LENS, m.zs),
+        core: (at.core ?? m.core) / KPC,
+        cut: m.cut / KPC,
+        kappa: m.kappa,
+        gamma: m.gamma,
+      });
+    }
+
+    const clampSource = (x: number, y: number) => ({
+      x: Math.max(-limX, Math.min(limX, x)),
+      y: Math.max(-limY, Math.min(limY, y)),
+    });
+
+    function rebuild() {
+      eff = efficiency(Z_LENS, state.zs);
+      lens = lensFor(state);
+      an = analyse(lens, FINE);
+      chartCross = crossSection(lens, COARSE);
+
+      // The isolated galaxy does not depend on the cluster sliders; keep it while they move.
+      const iso: State = { ...state, env: 'isolated' };
+      const m = model(iso);
+      const key = `${m.sigma}|${m.core}|${m.cut}|${m.zs}`;
+      if (key !== isoKey) {
+        isoKey = key;
+        isoTheta = einsteinRadius(lensFor(iso));
+      }
+
+      ({ srcHalf, imgHalf, limX, limY } = viewsFor(lens, an, SRC_WIDTH));
+      // Start just inside the caustics, where the source has several images.
+      wanted ??= { x: 0.06 * srcHalf, y: 0.25 * srcHalf };
+      src = clampSource(wanted.x, wanted.y);
+
+      // Rays through the image-plane cells (x right, y up). The cells are offset
+      // by half a cell, so none sits on the centre (singular for a coreless profile).
+      const h = (2 * imgHalf) / N;
+      const m11 = lens.m11;
+      const m22 = lens.m22;
+      const rc = lens.core;
+      const rt = lens.cut;
+      for (let j = 0; j < N; j++) {
+        const y = imgHalf - (j + 0.5) * h;
+        for (let i = 0; i < N; i++) {
+          const x = -imgHalf + (i + 0.5) * h;
+          // Inline of toSource(): beta = (m - kbar) theta. With rt = Infinity, st
+          // is infinite and its terms vanish, as they should.
+          const r2 = x * x + y * y;
+          const sc = Math.sqrt(rc * rc + r2);
+          const st = Math.sqrt(rt * rt + r2);
+          const kbar = lens.amp * (1 / (sc + rc) - 1 / (st + rt));
+          const p = j * N + i;
+          rayX[p] = (m11 - kbar) * x;
+          rayY[p] = (m22 - kbar) * y;
+          // Jacobian, as in jacobianDet(), for the cell's footprint.
+          const kap = 0.5 * lens.amp * (1 / sc - 1 / st);
+          const d = r2 > 0 ? (2 * (kap - kbar)) / r2 : 0;
+          const a11 = m11 - kbar - d * x * x;
+          const a22 = m22 - kbar - d * y * y;
+          const a12 = -d * x * y;
+          rayBlur[p] = ((h * h) / 24) * (a11 * a11 + 2 * a12 * a12 + a22 * a22);
+        }
+      }
+
+      // Faint shading of the area with three or more images.
+      const mu = an.multiplicity;
+      if (mu) {
+        regionBuffer.width = mu.nx;
+        regionBuffer.height = mu.ny;
+        const img = rctx.createImageData(mu.nx, mu.ny);
+        for (let j = 0; j < mu.ny; j++) {
+          // Grid rows run upwards; canvas rows run downwards.
+          const row = (mu.ny - 1 - j) * mu.nx;
+          for (let i = 0; i < mu.nx; i++) {
+            if (mu.counts[j * mu.nx + i] < 3) continue;
+            const o = 4 * (row + i);
+            img.data[o] = 240;
+            img.data[o + 1] = 183;
+            img.data[o + 2] = 117;
+            img.data[o + 3] = 40;
+          }
+        }
+        rctx.putImageData(img, 0, 0);
+      }
+    }
+
+    // --- sky views ------------------------------------------------------------------
+    /** Sizes a canvas to its CSS box at the device pixel ratio (at most 2) and returns its CSS width. */
+    function fit(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): number {
+      const w = canvas.getBoundingClientRect().width;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const px = Math.max(1, Math.round(w * dpr));
+      if (canvas.width !== px) canvas.width = canvas.height = px;
+      ctx.setTransform(px / w, 0, 0, px / w, 0, 0);
+      return w;
+    }
+
+    /** Adds the curves to the current path, in canvas coordinates for a view of half-width `half`. */
+    function tracePath(ctx: CanvasRenderingContext2D, curves: Curve[], half: number, w: number) {
+      const k = w / (2 * half);
+      for (const c of curves) {
+        const p = c.points;
+        if (p.length < 4) continue;
+        ctx.moveTo((p[0] + half) * k, (half - p[1]) * k);
+        for (let s = 2; s < p.length; s += 2) ctx.lineTo((p[s] + half) * k, (half - p[s + 1]) * k);
+        if (c.closed) ctx.closePath();
+      }
+    }
+
+    function strokeCurves(
+      ctx: CanvasRenderingContext2D,
+      curves: Curve[],
+      half: number,
+      w: number,
+      color: string,
+      width: number,
+      dash: number[] = [],
+    ) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.setLineDash(dash);
+      ctx.beginPath();
+      tracePath(ctx, curves, half, w);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    function scaleBar(ctx: CanvasRenderingContext2D, half: number, w: number) {
+      const len = [...SCALE_BARS].reverse().find((v) => v <= half / 2) ?? SCALE_BARS[0];
+      const px = (len / (2 * half)) * w;
+      const x = 12;
+      const y = w - 14;
+      ctx.strokeStyle = ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + px, y);
+      ctx.stroke();
+      ctx.font = `500 11px ${fontUi}`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(`${len}″`, x, y - 4);
+    }
+
+    function marker(ctx: CanvasRenderingContext2D, x: number, y: number) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(x - 7, y);
+      ctx.lineTo(x - 3, y);
+      ctx.moveTo(x + 3, y);
+      ctx.lineTo(x + 7, y);
+      ctx.moveTo(x, y - 7);
+      ctx.lineTo(x, y - 3);
+      ctx.moveTo(x, y + 3);
+      ctx.lineTo(x, y + 7);
+      ctx.stroke();
+    }
+
+    function drawImagePlane() {
+      const s = src;
+      // Brightness of the Gaussian source at each ray's landing point, widened by
+      // the cell's footprint (with the flux kept, so thin images fade rather than vanish).
+      const v0 = SRC_WIDTH * SRC_WIDTH;
+      const data = pixels.data;
+      const [r0, g0, b0] = SOURCE_RGB;
+      for (let p = 0; p < N * N; p++) {
+        const dx = rayX[p] - s.x;
+        const dy = rayY[p] - s.y;
+        const d2 = dx * dx + dy * dy;
+        const v = v0 + rayBlur[p];
+        const o = 4 * p;
+        if (d2 < 16 * v) {
+          // The floor keeps images visible when one pixel is much wider than the source (very large
+          // views near the κc + γc limit), at the cost of slightly overstating their flux there.
+          const f = Math.max(v0 / v, 0.3) * Math.exp((-0.5 * d2) / v);
+          // A white core inside a blue disc.
+          const core = f * f * f;
+          data[o] = r0 * f + 99 * core;
+          data[o + 1] = g0 * f + 54 * core;
+          data[o + 2] = b0 * f;
+          data[o + 3] = 255 * Math.min(1, 1.6 * f);
+        } else {
+          data[o + 3] = 0;
+        }
+      }
+      bctx.putImageData(pixels, 0, 0);
+
+      const w = fit(imageCanvas, ictx);
+      ictx.clearRect(0, 0, w, w);
+      // The member's own light, faint, at the centre.
+      const k = w / (2 * imgHalf);
+      const glowR = Math.max(6, 2.5 * lens.core * k);
+      const glow = ictx.createRadialGradient(w / 2, w / 2, 0, w / 2, w / 2, glowR);
+      glow.addColorStop(0, 'rgba(248,210,162,0.55)');
+      glow.addColorStop(1, 'rgba(248,210,162,0)');
+      ictx.fillStyle = glow;
+      ictx.fillRect(0, 0, w, w);
+      ictx.imageSmoothingEnabled = true;
+      ictx.drawImage(imageBuffer, 0, 0, w, w);
+      strokeCurves(ictx, an.radialCritical, imgHalf, w, CRITICAL, 1, [4, 3]);
+      strokeCurves(ictx, an.tangentialCritical, imgHalf, w, CRITICAL, 1.8);
+      // Where the source really is, without the lens.
+      marker(ictx, (s.x + imgHalf) * k, (imgHalf - s.y) * k);
+      scaleBar(ictx, imgHalf, w);
+    }
+
+    function drawSourcePlane() {
+      const s = src;
+      const w = fit(sourceCanvas, sctx);
+      const k = w / (2 * srcHalf);
+      sctx.clearRect(0, 0, w, w);
+      // Faint: three or more images. Strong: inside the tangential caustic (nonzero winding).
+      const m = an.multiplicity;
+      if (m) {
+        sctx.imageSmoothingEnabled = false;
+        sctx.drawImage(regionBuffer, (m.x0 + srcHalf) * k, (srcHalf - (m.y0 + m.ny * m.cell)) * k, m.nx * m.cell * k, m.ny * m.cell * k);
+      }
+      if (an.crossSection > 0) {
+        sctx.fillStyle = INSIDE_TANGENTIAL;
+        sctx.beginPath();
+        tracePath(sctx, an.tangentialCaustic, srcHalf, w);
+        sctx.fill('nonzero');
+      }
+      strokeCurves(sctx, an.radialCaustic, srcHalf, w, CAUSTIC, 1, [4, 3]);
+      // A singular profile's cut, the image of its centre.
+      strokeCurves(sctx, an.cut, srcHalf, w, CAUSTIC, 1, [4, 3]);
+      strokeCurves(sctx, an.tangentialCaustic, srcHalf, w, CAUSTIC, 1.6);
+      // A tangential caustic that has shrunk to a point (no shear) is drawn as a dot.
+      if (an.tangentialCaustic.length > 0 && Math.max(...tangentialExtent()) * k < 1.5) {
+        sctx.fillStyle = CAUSTIC;
+        sctx.beginPath();
+        sctx.arc(w / 2, w / 2, 2, 0, 2 * Math.PI);
+        sctx.fill();
+      }
+      // The box the source is kept in, when it is smaller than the view.
+      if (limX < srcHalf || limY < srcHalf) {
+        sctx.strokeStyle = 'rgba(255,255,255,0.45)';
+        sctx.lineWidth = 1;
+        sctx.setLineDash([2, 3]);
+        sctx.strokeRect((srcHalf - limX) * k, (srcHalf - limY) * k, 2 * limX * k, 2 * limY * k);
+        sctx.setLineDash([]);
+      }
+      // The background galaxy, at its true Gaussian width (at least a few pixels, to stay visible).
+      const cx = (s.x + srcHalf) * k;
+      const cy = (srcHalf - s.y) * k;
+      const rad = Math.max(3, 2.5 * SRC_WIDTH * k);
+      const g = sctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
+      g.addColorStop(0, 'rgba(255,255,255,0.95)');
+      g.addColorStop(0.3, `rgba(${SOURCE_RGB.join(',')},0.8)`);
+      g.addColorStop(1, `rgba(${SOURCE_RGB.join(',')},0)`);
+      sctx.fillStyle = g;
+      sctx.beginPath();
+      sctx.arc(cx, cy, rad, 0, 2 * Math.PI);
+      sctx.fill();
+      marker(sctx, cx, cy);
+      scaleBar(sctx, srcHalf, w);
+    }
+
+    function tangentialExtent(): [number, number] {
+      let ex = 0;
+      let ey = 0;
+      for (const c of an.tangentialCaustic) {
+        for (let s = 0; s < c.points.length; s += 2) {
+          ex = Math.max(ex, Math.abs(c.points[s]));
+          ey = Math.max(ey, Math.abs(c.points[s + 1]));
+        }
+      }
+      return [ex, ey];
+    }
+
+    // --- readouts -------------------------------------------------------------------
+    const num = (key: string, text: string) => {
+      const el = panel.querySelector(`[data-num="${key}"]`);
+      if (el) el.textContent = text;
+    };
+    const angle = (t: number) => (t > 0 ? `${t.toFixed(2)}″ (${(t * KPC).toFixed(2)} kpc)` : 'none');
+
+    function syncNumbers() {
+      num('cross', area(an.crossSection));
+      num('multi', area(an.multiplyImagedArea));
+      num('thetaE', angle(einsteinRadius(lens)));
+      num('thetaIso', angle(isoTheta));
+      num('mass', state.profile === 'dpie' ? `${sci(dpieMass(state.sigma, state.cut))} M☉` : 'not finite (no truncation)');
+      num('eff', eff.toFixed(3));
+
+      let text = '';
+      if (an.tangentialCritical.length === 0) {
+        text = 'The galaxy is not dense enough at its centre to form critical curves here, so it makes no multiple images.';
+      } else if (an.crossSection === 0) {
+        text =
+          (state.env === 'isolated'
+            ? 'An isolated round galaxy feels no external shear, so its tangential caustic is a single point and its GGSL cross-section is 0 arcsec².'
+            : 'With no cluster shear, this round galaxy’s tangential caustic is a single point, so its GGSL cross-section is 0 arcsec².') +
+          (an.multiplyImagedArea > 0 ? ' The area with three or more images here is the inside of the radial caustic.' : '') +
+          (an.cut.length > 0 ? ' Sources inside the dashed circle, the cut, have two images.' : '');
+      }
+      status.textContent = text;
+      status.hidden = text === '';
+    }
+
+    function syncControls() {
+      for (const r of radios) r.checked = state[r.dataset.model as 'profile' | 'env'] === r.value;
+      const gInput = inputs.find((i) => i.dataset.param === 'gamma')!;
+      gInput.max = String(gammaMax(state.kappa));
+      for (const input of inputs) {
+        const key = input.dataset.param as Key;
+        const out = panel.querySelector<HTMLOutputElement>(`[data-out="${key}"]`);
+        const fixed = fixedBy(state, key);
+        if (fixed) {
+          // Shown at the end of the range it stands for; the free value stays in the state.
+          input.value = fixed.at === 'min' ? input.min : input.max;
+          if (out) out.value = fixed.text;
+        } else {
+          input.value = String(state[key]);
+          // The browser clamps to the range; keep the state in step.
+          state[key] = Number(input.value);
+          if (out) out.value = FORMAT[key](state[key]);
+        }
+        setFrozen(input, fixed !== null, fixed?.reason);
+      }
+    }
+
+    // --- chart ------------------------------------------------------------------------
+    const plot = new Plot(chartCanvas, {
+      x: { min: 80, max: 350, label: 'Member velocity dispersion (km/s)' },
+      y: { min: 1e-3, max: 10, log: true, label: 'GGSL cross-section (arcsec²)' },
+    });
+    const curves = {
+      field: new Float64Array(CHART_SIGMAS.length).fill(NaN),
+      compact: new Float64Array(CHART_SIGMAS.length).fill(NaN),
+      diffuse: new Float64Array(CHART_SIGMAS.length).fill(NaN),
+    };
+    /** Whether the chart's curves were computed for a profile with a core (so the core-halved and doubled curves exist). */
+    let chartHasCore = true;
+    let chartKey = '';
+    let chartJob = 0;
+    let chartTimer = 0;
+
+    function drawChart() {
+      plot.begin();
+      // Log axis: zeros (no tangential caustic) are not drawn, so the limits come
+      // from the positive values, spanning at most four decades.
+      let hi = 0;
+      let lo = Infinity;
+      const all = [...curves.field, ...curves.compact, ...curves.diffuse, an ? chartCross : 0];
+      for (const v of all) {
+        if (v > hi) hi = v;
+        if (v > 0 && v < lo) lo = v;
+      }
+      if (hi > 0) {
+        const top = 10 ** Math.ceil(Math.log10(hi) + 0.05);
+        const bottom = Math.max(10 ** Math.floor(Math.log10(lo) - 0.05), top / 1e4);
+        if (plot.y.min !== bottom || plot.y.max !== top) {
+          plot.y = { ...plot.y, min: bottom, max: top };
+          plot.begin();
+        }
+      }
+      if (chartHasCore) {
+        plot.line(CHART_SIGMAS, curves.diffuse, { color: SERIES[1] });
+        plot.line(CHART_SIGMAS, curves.compact, { color: SERIES[2], dash: [5, 4] });
+      }
+      plot.line(CHART_SIGMAS, curves.field, { color: SERIES[0], width: 2.4 });
+      if (an) {
+        plot.rule('x', state.sigma, { color: plot.theme.muted, dash: [3, 3] });
+        plot.points([state.sigma], [chartCross], { color: SERIES[0], radius: 4 });
+      }
+      if (hi === 0) {
+        const msg = model(state).gamma === 0 ? 'No cluster shear: the tangential caustic is a point, so the cross-section is 0' : 'No tangential caustic anywhere in this range';
+        plot.text(215, Math.sqrt(plot.y.min * plot.y.max), msg, { align: 'center' });
+      }
+      const field = state.env === 'isolated' ? 'This galaxy, isolated' : 'This galaxy, in this cluster field';
+      plot.legend(
+        chartHasCore
+          ? [
+              { label: field, color: SERIES[0] },
+              { label: 'Core radius halved', color: SERIES[2], dash: [5, 4] },
+              { label: 'Core radius doubled', color: SERIES[1] },
+            ]
+          : [{ label: field, color: SERIES[0] }],
+        // The curves rise to the right, so the top-left corner is clear.
+        'top-left',
+      );
+    }
+
+    /** Recomputes the chart's curves a few models per task; a newer request cancels an older one. */
+    function computeChart() {
+      const job = ++chartJob;
+      const s = { ...state };
+      const hasCore = s.profile !== 'sis';
+      const core = model(s).core;
+      let i = 0;
+      const step = () => {
+        if (job !== chartJob) return;
+        const t0 = performance.now();
+        while (i < CHART_SIGMAS.length && performance.now() - t0 < 12) {
+          const sigma = CHART_SIGMAS[i];
+          curves.field[i] = crossSection(lensFor(s, { sigma }), COARSE);
+          curves.compact[i] = hasCore ? crossSection(lensFor(s, { sigma, core: core / 2 }), COARSE) : NaN;
+          curves.diffuse[i] = hasCore ? crossSection(lensFor(s, { sigma, core: core * 2 }), COARSE) : NaN;
+          i++;
+        }
+        if (i < CHART_SIGMAS.length) setTimeout(step, 0);
+        else {
+          chartHasCore = hasCore;
+          chartNote.hidden = hasCore;
+          chartCanvas.setAttribute(
+            'aria-label',
+            hasCore ? chartLabel : chartLabel.replace(/ and for versions with its core radius halved and doubled\.$/, '. The singular profile has no core to halve or double.'),
+          );
+          plot.redraw();
+        }
+      };
+      step();
+    }
+
+    /** The curves depend on the model and everything except the velocity dispersion, which only moves the marker. */
+    function scheduleChart(immediate = false) {
+      const m = model(state);
+      const key = `${state.profile}|${state.env}|${m.core}|${m.cut}|${m.kappa}|${m.gamma}|${m.zs}`;
+      if (key === chartKey) return;
+      chartKey = key;
+      clearTimeout(chartTimer);
+      chartJob++;
+      chartTimer = window.setTimeout(computeChart, immediate ? 0 : 220);
+    }
+
+    // --- frame loop -----------------------------------------------------------------
+    let modelDirty = true;
+    let queued = false;
+    function invalidate(model = false) {
+      if (model) modelDirty = true;
+      if (!queued) {
+        queued = true;
+        requestAnimationFrame(frame);
+      }
+    }
+    function frame() {
+      queued = false;
+      if (modelDirty) {
+        modelDirty = false;
+        rebuild();
+        syncNumbers();
+        plot.redraw();
+      }
+      drawImagePlane();
+      drawSourcePlane();
+    }
+
+    // --- controls -----------------------------------------------------------------------
+    /** Marks the preset the current state matches, if any. */
+    function syncPresets() {
+      const name = Object.keys(PRESETS).find((p) => KEYS.every((k) => PRESETS[p][k] === state[k])) ?? null;
+      presetButtons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.preset === name)));
+    }
+
+    function changed(immediateChart: boolean) {
+      syncControls();
+      syncPresets();
+      scheduleChart(immediateChart);
+      invalidate(true);
+    }
+
+    panel.addEventListener('input', (ev) => {
+      const input = ev.target as HTMLInputElement;
+      const which = input.dataset.model;
+      if (which === 'profile') {
+        state.profile = input.value as Profile;
+        changed(true);
+        return;
+      }
+      if (which === 'env') {
+        state.env = input.value as Env;
+        changed(true);
+        return;
+      }
+      const key = input.dataset.param as Key | undefined;
+      if (!key || input.disabled) return;
+      state[key] = Number(input.value);
+      changed(false);
+    });
+
+    function apply(s: State) {
+      Object.assign(state, s);
+      changed(true);
+    }
+    presetButtons.forEach((b) => b.addEventListener('click', () => apply(PRESETS[b.dataset.preset!])));
+    panel.querySelector('[data-reset]')!.addEventListener('click', () => {
+      wanted = null;
+      apply(DEFAULT);
+    });
+
+    // --- moving the source --------------------------------------------------------------
+    // Both views put the source at the pointer, in that view's own coordinates.
+    function moveSource(x: number, y: number) {
+      src = clampSource(x, y);
+      wanted = { ...src };
+      invalidate();
+    }
+    function bindSky(canvas: HTMLCanvasElement, half: () => number) {
+      const place = (ev: PointerEvent) => {
+        const rect = canvas.getBoundingClientRect();
+        const h = half();
+        moveSource(((ev.clientX - rect.left) / rect.width - 0.5) * 2 * h, (0.5 - (ev.clientY - rect.top) / rect.height) * 2 * h);
+      };
+      canvas.addEventListener('pointerdown', (ev) => {
+        canvas.setPointerCapture(ev.pointerId);
+        place(ev);
+      });
+      canvas.addEventListener('pointermove', (ev) => {
+        if (canvas.hasPointerCapture(ev.pointerId)) place(ev);
+      });
+      // Arrow keys move the source by 2% of the source-plane view (10% with Shift).
+      canvas.addEventListener('keydown', (ev) => {
+        const d = ARROWS[ev.key];
+        if (!d) return;
+        ev.preventDefault();
+        const step = (ev.shiftKey ? 0.1 : 0.02) * srcHalf;
+        moveSource(src.x + d[0] * step, src.y + d[1] * step);
+      });
+    }
+    bindSky(imageCanvas, () => imgHalf);
+    bindSky(sourceCanvas, () => srcHalf);
+
+    new ResizeObserver(() => invalidate()).observe(imageCanvas);
+
+    // --- start ------------------------------------------------------------------------
+    syncControls();
+    syncPresets();
+    rebuild();
+    modelDirty = false;
+    syncNumbers();
+    plot.observe(drawChart);
+    scheduleChart(true);
+    invalidate();
+  }
+
+  document.querySelectorAll<HTMLElement>('[data-ggsl]').forEach(init);
+</script>
