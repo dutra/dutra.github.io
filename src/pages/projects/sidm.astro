@@ -1,0 +1,749 @@
+---
+// A timeline of a self-interacting dark matter halo: core formation, then
+// gravothermal core collapse, and what each does to the halo's strength as a
+// lens inside a galaxy cluster.
+//
+//  - src/lib/sidm.ts             the parametric halo model, masses, projection and lensing
+//  - src/lib/lens/cosmology.ts   distances (flat ΛCDM, H0 = 70, Ωm = 0.3)
+//  - src/lib/plot.ts             the canvas charts
+//
+// Controls are bound by their data-param attributes. Everything that does not
+// depend on time (the initial halo, t_c, the evolution curves) is recomputed only
+// when mass, concentration or cross-section change; one rAF-coalesced update
+// draws the rest. Time runs from 0 to span = min(T_LENS, 1.25 t_c): the age of the
+// Universe at the lens redshift, or a little past the collapse time if that is sooner.
+// When a change shortens the span below the current time, the time goes to t_c.
+//
+// Two model choices freeze sliders rather than hide them (setFrozen in src/lib/controls.ts):
+// cold dark matter fixes σ/m at 0 and stops the clock, and an isolated lens fixes κ_c at 0.
+// The values set under the other choice are kept and come back when it is chosen again.
+import Base from '../../layouts/Base.astro';
+import '../../styles/tools.css';
+import { SIGMA_STEPS, T_LENS, Z_LENS } from '../../lib/sidm';
+const tLens = T_LENS.toFixed(2);
+---
+
+<Base
+  title="SIDM core collapse"
+  description="An interactive timeline of a self-interacting dark matter halo as it forms a core and then collapses, and how its strength as a gravitational lens changes."
+>
+  <div class="tool" data-sidm>
+    <div class="tool-head">
+      <a class="tool-back" href="/projects/">Projects</a>
+      <h1>SIDM core collapse</h1>
+      <p class="intro">
+        A dark matter halo whose particles scatter off each other first grows a low-density core, then collapses to a dense,
+        steep centre. Run time forward to follow its density profile and its lensing strength as a subhalo of a cluster at
+        z&nbsp;=&nbsp;{Z_LENS}.
+      </p>
+    </div>
+
+    <div class="tool-body">
+      <form class="tool-panel" aria-label="Halo controls" onsubmit="return false">
+        <fieldset>
+          <legend>Halo</legend>
+          <div class="tool-models" role="radiogroup" aria-label="Dark matter model">
+            <label><input type="radio" name="sidm-model" value="cdm" /><span>Cold (CDM)</span></label>
+            <label><input type="radio" name="sidm-model" value="sidm" checked /><span>Self-interacting (SIDM)</span></label>
+          </div>
+          <label class="tool-row">
+            <span><span>Mass M<sub>200</sub></span> <output data-out="logM"></output></span>
+            <input type="range" data-param="logM" min="9" max="12" step="0.01" />
+          </label>
+          <label class="tool-row">
+            <span><span>Concentration c<sub>200</sub></span> <output data-out="c"></output></span>
+            <input type="range" data-param="c" min="5" max="60" step="0.5" />
+          </label>
+          <label class="tool-row">
+            <span><span>Cross-section σ/m</span> <output data-out="sigma"></output></span>
+            <input type="range" data-param="sigma" min="0" max={SIGMA_STEPS} step="1" />
+          </label>
+          <div class="tool-buttons" aria-label="Presets">
+            <button type="button" class="tool-button" data-preset="dwarf">Cored dwarf</button>
+            <button type="button" class="tool-button" data-preset="collapse">Core-collapsing subhalo</button>
+            <button type="button" class="tool-button" data-preset="cdm">Collisionless (CDM)</button>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Time</legend>
+          <label class="tool-row">
+            <span><span>Time t</span> <output data-out="t"></output></span>
+            <input type="range" data-param="t" min="0" max="1000" step="1" />
+          </label>
+          <p class="sidm-hint">
+            Time is measured from when the halo formed as an NFW halo, and cannot exceed {tLens}&nbsp;Gyr, the age of the
+            Universe at the cluster's redshift.
+          </p>
+          <div class="tool-buttons">
+            <button type="button" class="tool-button" data-play aria-pressed="false">Play</button>
+            <button type="button" class="tool-button" data-reset>Reset</button>
+          </div>
+          <p class="sidm-status" data-status role="status" hidden></p>
+        </fieldset>
+
+        <fieldset>
+          <legend>Lensing</legend>
+          <div class="tool-models" role="radiogroup" aria-label="Lens environment">
+            <label><input type="radio" name="sidm-env" value="isolated" /><span>Isolated</span></label>
+            <label><input type="radio" name="sidm-env" value="cluster" checked /><span>In a cluster</span></label>
+          </div>
+          <label class="tool-row">
+            <span><span>Cluster convergence κ<sub>c</sub></span> <output data-out="kappaC"></output></span>
+            <input type="range" data-param="kappaC" min="0" max="0.9" step="0.01" />
+          </label>
+          <label class="tool-row">
+            <span><span>Source redshift z<sub>s</sub></span> <output data-out="zs"></output></span>
+            <input type="range" data-param="zs" min="0.5" max="8" step="0.01" />
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Now</legend>
+          <dl class="tool-numbers">
+            <div><dt>Collapse time t<sub>c</sub></dt><dd data-num="tc">–</dd></div>
+            <div><dt>τ = t / t<sub>c</sub></dt><dd data-num="tau">–</dd></div>
+            <div><dt>Phase</dt><dd data-num="phase">–</dd></div>
+            <div><dt>Core radius r<sub>c</sub></dt><dd data-num="rc">–</dd></div>
+            <div><dt>Central density</dt><dd data-num="rho0">–</dd></div>
+            <div><dt>V<sub>max</sub></dt><dd data-num="vmax">–</dd></div>
+            <div><dt>r<sub>max</sub></dt><dd data-num="rmax">–</dd></div>
+            <div><dt>Einstein radius now</dt><dd data-num="thetaE">–</dd></div>
+            <div><dt>Einstein radius initially</dt><dd data-num="thetaE0">–</dd></div>
+            <div><dt>D<sub>ls</sub>/D<sub>s</sub></dt><dd data-num="eff">–</dd></div>
+          </dl>
+        </fieldset>
+      </form>
+
+      <div class="tool-figures">
+        <figure class="tool-figure">
+          <figcaption>Density profile: initial NFW (dashed) and the halo now (solid)</figcaption>
+          <canvas data-plot="profile" role="img" aria-label="Density against radius, log-log, for the initial and current halo."
+          ></canvas>
+        </figure>
+        <figure class="tool-figure">
+          <figcaption>Evolution: central density and core radius against time</figcaption>
+          <canvas class="sidm-short" data-plot="rho0" role="img" aria-label="Central density against time."></canvas>
+          <canvas class="sidm-short" data-plot="rc" role="img" aria-label="Core radius against time."></canvas>
+        </figure>
+        <figure class="tool-figure">
+          <figcaption>Mean convergence inside projected radius R, with the threshold 1 − κ<sub>c</sub></figcaption>
+          <canvas data-plot="kappa" role="img" aria-label="Mean convergence against projected radius for the initial and current halo."
+          ></canvas>
+        </figure>
+      </div>
+    </div>
+
+    <div class="tool-notes">
+      <h2>What this shows</h2>
+      <p>
+        Scattering lets dark matter particles exchange energy, so heat flows down the halo's temperature (velocity
+        dispersion) gradient. An NFW halo is colder at its centre than near r<sub>s</sub>, so heat first flows inward: the
+        central particles are heated, their orbits spread out, and the cusp becomes a low-density core. Once the core is
+        warmer than its surroundings, heat flows outward instead. A self-gravitating core has negative heat capacity: losing
+        energy makes it contract and heat up, which drives more heat out. This runaway, the gravothermal catastrophe, makes the
+        central density climb steeply as t approaches the collapse time t<sub>c</sub>.
+      </p>
+      <p>
+        A lens needs a high projected density near its centre. For haloes like the default, whose Einstein radius is
+        comparable to the core, the cored halo is a weaker lens than the NFW halo it started from; the collapsing halo packs
+        more mass into a small radius and becomes a stronger one. Inside a cluster that
+        already supplies a convergence κ<sub>c</sub>, a subhalo produces its own critical curve where its mean convergence
+        reaches 1 − κ<sub>c</sub>. With enough cluster convergence (roughly κ<sub>c</sub> ≳ 0.4 for the default halo) the
+        collapsing halo's Einstein radius grows well beyond the initial one: at κ<sub>c</sub> = 0.6 and z<sub>s</sub> = 2 it
+        goes from 0.03″ to 0.14″ by τ = 1. With little external convergence, or none for an isolated halo, even the τ = 1
+        profile of this halo stays subcritical and has no Einstein radius at all. A massive, concentrated halo has an
+        Einstein radius well outside its core, so the core barely weakens it: for M<sub>200</sub> = 10¹² M☉ and c<sub>200</sub> = 60 its Einstein radius never falls below the initial one. Dutra, Natarajan &amp; Gilman (2025) discuss steeper, core-collapsed subhaloes as a way to
+        raise the rate of galaxy-galaxy strong lensing in clusters.
+      </p>
+
+      <h2>Model and assumptions</h2>
+      <ul>
+        <li>
+          The halo follows the parametric SIDM model of Yang, Nadler, Yu &amp; Zhong (2024): a cored NFW form whose scale
+          density, scale radius and core radius are fitted functions of τ = t / t<sub>c</sub>. The fits come from an isolated
+          N-body SIDM halo followed from τ = 0 to its collapse at τ = 1. The paper reports that the cored NFW form fits the
+          simulated profiles to within 10% even at τ = 1, and that the fitted central density follows the simulation up to
+          τ ≈ 0.87 and is about 15% low at τ = 1. The paper truncates the evolution at t<sub>c</sub> to avoid
+          extrapolation, and so does this page: past τ = 1 the halo is shown at its τ = 1 profile. The fits do not conserve mass exactly:
+          the mass inside r<sub>200</sub> is about 4% low at τ = 0.2 and about 9% low at τ = 1.
+        </li>
+        <li>
+          The collapse time is t<sub>c</sub> = (150 / C) / [(σ/m) ρ<sub>s,0</sub> r<sub>s,0</sub>] · (4π G ρ<sub>s,0</sub>)<sup
+            >−1/2</sup
+          > with C = 0.75, from the initial NFW parameters. The cross-section is constant and independent of velocity. The
+          cold (CDM) model has no self-interaction: σ/m is 0, the collapse time is infinite and the NFW halo does not evolve.
+        </li>
+        <li>
+          The halo is isolated and starts as an NFW halo at t = 0, with M<sub>200</sub> and c<sub>200</sub> defined against the
+          critical density at z = {Z_LENS}. There is no tidal stripping, no further accretion and no baryons, all of which
+          matter for real subhaloes. Projections run along the line of sight out to 2 r<sub>200</sub>.
+        </li>
+        <li>
+          Distances are for flat ΛCDM with H<sub>0</sub> = 70 km/s/Mpc and Ω<sub>m</sub> = 0.3. The cluster is a uniform sheet
+          of convergence κ<sub>c</sub> with no shear; an isolated lens has κ<sub>c</sub> = 0. Einstein radii are only searched above 1 pc. For the cuspy NFW halo κ̄(&lt;R)
+          keeps rising towards the centre, so a very small Einstein radius depends on how far in the grid goes; anything
+          below 0.01″ is reported as unresolved.
+        </li>
+        <li>This is an illustration of the model, not a fit to any observed system.</li>
+      </ul>
+
+      <h2>References</h2>
+      <ul class="sidm-refs">
+        <li>Spergel &amp; Steinhardt 2000, arXiv:astro-ph/9909386</li>
+        <li>Balberg, Shapiro &amp; Inagaki 2002, arXiv:astro-ph/0110561</li>
+        <li>Pollack, Spergel &amp; Steinhardt 2015, arXiv:1501.00017</li>
+        <li>Essig, McDermott, Yu &amp; Zhong 2019, arXiv:1809.01144</li>
+        <li>Yang, Nadler, Yu &amp; Zhong 2024, arXiv:2305.16176</li>
+        <li>Navarro, Frenk &amp; White 1997, arXiv:astro-ph/9611107</li>
+        <li>Bartelmann 1996, arXiv:astro-ph/9602053</li>
+        <li>Dutra, Natarajan &amp; Gilman 2025, arXiv:2406.17024</li>
+      </ul>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .tool-figure canvas.sidm-short {
+    height: 170px;
+  }
+  .tool-figure canvas.sidm-short + canvas.sidm-short {
+    margin-top: 6px;
+  }
+  /* "Self-interacting (SIDM)" wraps in the narrow panel: let both halves of the selector fill its
+     height and centre their text, so the chosen one is shaded edge to edge. */
+  .tool-models label {
+    display: flex;
+  }
+  .tool-models span {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    justify-content: center;
+  }
+  /* Play is disabled in the CDM model, where nothing evolves. */
+  .tool-button:disabled {
+    border-color: var(--line);
+    color: var(--muted);
+    cursor: not-allowed;
+  }
+  .sidm-hint {
+    margin: 0;
+    color: var(--ink-soft);
+    font-size: 0.92rem;
+  }
+  .sidm-status {
+    margin: 0;
+    padding: 8px 10px;
+    border-left: 2px solid var(--amber);
+    color: var(--ink);
+  }
+  .tool-notes ul {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding-left: 1.2em;
+  }
+  .sidm-refs {
+    font-size: 0.92rem;
+    overflow-wrap: anywhere;
+  }
+</style>
+
+<script>
+  import { Plot, SERIES } from '../../lib/plot';
+  import { setFrozen, setMarks } from '../../lib/controls';
+  import { efficiency, kpcPerArcsec } from '../../lib/lens/cosmology';
+  import {
+    LENS_GRID,
+    TAU_MAX,
+    T_LENS,
+    TRUNCATION,
+    Z_LENS,
+    centralDensity,
+    clampTime,
+    collapseTime,
+    convergence,
+    criticalSurfaceDensity,
+    density,
+    einsteinRadius,
+    history,
+    logspace,
+    massTable,
+    nfwHalo,
+    phase,
+    profileAt,
+    project,
+    sigmaAtStep,
+    stepOfSigma,
+    timeSpan,
+    vmax,
+    type Halo,
+    type Profile,
+    type Projection,
+  } from '../../lib/sidm';
+
+  // --- parameters ------------------------------------------------------------------
+  type Model = 'cdm' | 'sidm';
+  type Env = 'isolated' | 'cluster';
+  interface Params {
+    /** Cold (no self-interaction) or self-interacting dark matter. */
+    model: Model;
+    /** log10 M200 / M☉ */
+    logM: number;
+    c: number;
+    /** σ/m in cm²/g, SIGMA_MIN…SIGMA_MAX; kept while the CDM model is chosen, which uses 0. */
+    sigma: number;
+    /** Gyr; kept while the CDM model is chosen, in which nothing evolves. */
+    t: number;
+    /** Whether the halo sits in a cluster or on its own. */
+    env: Env;
+    /** Cluster convergence; kept while the isolated lens is chosen, which uses 0. */
+    kappaC: number;
+    zs: number;
+  }
+  /** The parameters with a slider. */
+  type Key = 'logM' | 'c' | 'sigma' | 't' | 'kappaC' | 'zs';
+
+  const DEFAULTS: Params = { model: 'sidm', logM: 10.5, c: 20, sigma: 30, t: 3.5, env: 'cluster', kappaC: 0.6, zs: 2 };
+  /** The σ/m and κ_c the chosen models actually use. */
+  const sigmaOf = (p: Params) => (p.model === 'cdm' ? 0 : p.sigma);
+  const kappaOf = (p: Params) => (p.env === 'isolated' ? 0 : p.kappaC);
+
+  // Presets set the halo and the model; the collapsing one also puts time just before t_c.
+  const PRESETS: Record<string, (p: Params) => void> = {
+    dwarf: (p) => Object.assign(p, { model: 'sidm', logM: 10, c: 12, sigma: 10, t: T_LENS } satisfies Partial<Params>),
+    collapse: (p) => {
+      Object.assign(p, { model: 'sidm', logM: 10.5, c: 20, sigma: 15 } satisfies Partial<Params>);
+      p.t = Math.min(T_LENS, 0.97 * collapseTime(nfwHalo(10 ** p.logM, p.c), sigmaOf(p)));
+    },
+    cdm: (p) => Object.assign(p, { model: 'cdm' } satisfies Partial<Params>),
+  };
+
+  // Why each frozen slider is fixed (shown as the row's tooltip).
+  const WHY = {
+    sigma: 'Cold dark matter does not scatter: σ/m = 0',
+    t: 'Without self-interaction the NFW profile does not evolve',
+    kappaC: 'An isolated halo has no cluster convergence: κ_c = 0',
+  };
+
+  // --- formatting ----------------------------------------------------------------------
+  const SUP = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+  const sup = (n: number) => (n < 0 ? '⁻' : '') + String(Math.abs(n)).replace(/\d/g, (d) => SUP[Number(d)]);
+  /** 3.58 × 10⁹ */
+  function sci(v: number, digits = 3): string {
+    const e = Math.floor(Math.log10(v));
+    const m = v / 10 ** e;
+    return `${m.toFixed(digits - 1)} × 10${sup(e)}`;
+  }
+  /** Three significant figures without exponent noise. */
+  const sig = (v: number) => (v >= 1000 ? Math.round(v).toLocaleString('en') : String(Number(v.toPrecision(3))));
+  const fmtSigma = (s: number) => `${sig(s)} cm²/g`;
+  const fmtTc = (tc: number) => (!Number.isFinite(tc) ? '∞' : tc < 0.1 ? `${sig(tc * 1000)} Myr` : `${sig(tc)} Gyr`);
+  const fmtTau = (tau: number) => (tau < 0.01 && tau > 0 ? tau.toExponential(1) : tau.toFixed(2));
+  /** A time in Gyr, switching to Myr below 0.1 Gyr. */
+  const fmtTime = (t: number) => (t > 0 && t < 0.1 ? `${sig(t * 1000)} Myr` : `${t.toFixed(2)} Gyr`);
+  /** The time slider is an integer 0…STEPS across the current span. */
+  const STEPS = 1000;
+
+  const FORMAT: Record<Key, (p: Params, tc: number) => string> = {
+    logM: (p) => `${sci(10 ** p.logM)} M☉`,
+    c: (p) => p.c.toFixed(1),
+    sigma: (p) => fmtSigma(sigmaOf(p)),
+    t: (p, tc) => (p.model === 'cdm' ? `${fmtTime(p.t)} · no evolution` : `${fmtTime(p.t)} · τ = ${fmtTau(p.t / tc)}`),
+    kappaC: (p) => kappaOf(p).toFixed(2),
+    zs: (p) => p.zs.toFixed(2),
+  };
+
+  // Chart axes that keep tick labels short.
+  const decadeRange = (lo: number, hi: number): [number, number] => [10 ** Math.floor(Math.log10(lo)), 10 ** Math.ceil(Math.log10(hi))];
+
+  function init(root: HTMLElement) {
+    const panel = root.querySelector<HTMLFormElement>('.tool-panel')!;
+    const inputs = [...panel.querySelectorAll<HTMLInputElement>('[data-param]')];
+    const playButton = root.querySelector<HTMLButtonElement>('[data-play]')!;
+    const status = root.querySelector<HTMLElement>('[data-status]')!;
+    const canvas = (name: string) => root.querySelector<HTMLCanvasElement>(`[data-plot="${name}"]`)!;
+    const slider = (key: Key) => inputs.find((input) => input.dataset.param === key)!;
+    const radios = [...panel.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
+
+    const params: Params = { ...DEFAULTS };
+
+    // --- derived state, recomputed only when its inputs change ------------------------
+    // Depends on mass, concentration and σ/m.
+    let halo: Halo;
+    let tc = Infinity;
+    /** Length of the time axis, Gyr. */
+    let span = T_LENS;
+    /** Position of t_c on the time slider (0…STEPS), or −1 if t_c is past the span. */
+    let tcStep = -1;
+    /** Upper limit of the κ̄ chart, before dividing by Σ_cr: the largest mean surface density at R = 0.01 kpc over 0 ≤ τ ≤ 1. */
+    let sigmaBarMax = 0;
+    let hist: ReturnType<typeof history>;
+    let initialProj: Projection;
+    // Depends also on time.
+    let tau = 0;
+    let profile: Profile;
+    let proj: Projection;
+    let peak = { vmax: 0, rmax: 0 };
+    // Depends also on the lensing sliders.
+    let kappaBar: Float64Array = new Float64Array(0);
+    let kappaBar0: Float64Array = new Float64Array(0);
+    let thetaE = 0;
+    let thetaE0 = 0;
+    let eff = 0;
+
+    // Radii for the profile chart, set per halo.
+    let radii: Float64Array = new Float64Array(0);
+
+    const rt = () => TRUNCATION * halo.r200;
+
+    function computeHalo() {
+      halo = nfwHalo(10 ** params.logM, params.c);
+      const s = sigmaOf(params);
+      tc = s > 0 ? collapseTime(halo, s) : Infinity;
+      span = timeSpan(tc);
+      // Keep the current time in Gyr if it still fits; otherwise show the halo at t_c, the end of the model.
+      params.t = clampTime(params.t, tc, span);
+      // Mark t_c on the time slider, in the slider's 0…STEPS units, when it lies inside the span.
+      tcStep = tc <= span ? Math.round((tc / span) * STEPS) : -1;
+      setMarks(slider('t'), tcStep >= 0 ? [{ value: tcStep, label: 't_c', title: `Collapse time t_c = ${fmtTc(tc)}` }] : []);
+      hist = history(halo, tc, span);
+      initialProj = project(halo, rt(), LENS_GRID, massTable(halo, rt()));
+
+      // κ̄(<R) falls with R, so its largest visible value is at the chart's inner edge; take the
+      // largest over the whole evolution so the κ̄ axis does not move as time runs.
+      const inner = Float64Array.of(kappaPlot.x.min);
+      sigmaBarMax = 0;
+      for (let i = 0; i <= 20; i++) {
+        const p = profileAt(halo, (i / 20) * TAU_MAX);
+        const m = project(p, rt(), inner, massTable(p, rt())).mass[0];
+        sigmaBarMax = Math.max(sigmaBarMax, m / (Math.PI * inner[0] ** 2));
+      }
+
+      // Time axes: Myr when the span is shorter than 0.1 Gyr.
+      const myr = span < 0.1;
+      const format = myr ? (v: number) => String(Number((v * 1000).toPrecision(6))) : undefined;
+      rhoPlot.x = { ...rhoPlot.x, min: 0, max: span, format };
+      rcPlot.x = { ...rcPlot.x, min: 0, max: span, format, label: myr ? 'Time t (Myr)' : 'Time t (Gyr)' };
+
+      // Fixed axes for this halo, so the curves move as time runs.
+      const [r0, r1] = decadeRange(halo.rS / 100, halo.r200);
+      radii = logspace(r0, r1, 220);
+      const collapsed = profileAt(halo, TAU_MAX);
+      const [y0, y1] = decadeRange(density(halo, r1) / 3, Math.max(density(halo, r0), density(collapsed, r0)) * 2);
+      profilePlot.x = { ...profilePlot.x, min: r0, max: r1 };
+      profilePlot.y = { ...profilePlot.y, min: y0, max: y1 };
+
+      // Evolution axes from every finite, positive plotted point with t > 0 (t = 0 is the NFW cusp), padded to decades.
+      const range = (ys: Float64Array) => {
+        let lo = Infinity;
+        let hi = 0;
+        hist.t.forEach((t, i) => {
+          const y = ys[i];
+          if (!(Number.isFinite(y) && y > 0) || !(t > 0)) return;
+          lo = Math.min(lo, y);
+          hi = Math.max(hi, y);
+        });
+        return Number.isFinite(lo) ? decadeRange(lo / 1.5, hi * 1.5) : ([1, 10] as [number, number]);
+      };
+      const [d0, d1] = range(hist.rho0);
+      const [c0, c1] = range(hist.rC);
+      rhoPlot.y = { ...rhoPlot.y, min: d0, max: d1 };
+      rcPlot.y = { ...rcPlot.y, min: c0, max: c1 };
+    }
+
+    function computeTime() {
+      tau = Number.isFinite(tc) ? params.t / tc : 0;
+      profile = profileAt(halo, tau); // clamps τ to TAU_MAX
+      const table = massTable(profile, rt());
+      peak = vmax(table);
+      proj = project(profile, rt(), LENS_GRID, table);
+    }
+
+    function computeLensing() {
+      const sigmaCr = criticalSurfaceDensity(Z_LENS, params.zs);
+      eff = efficiency(Z_LENS, params.zs);
+      kappaBar = convergence(proj, sigmaCr).kappaBar;
+      kappaBar0 = convergence(initialProj, sigmaCr).kappaBar;
+      thetaE = einsteinRadius(LENS_GRID, kappaBar, kappaOf(params));
+      thetaE0 = einsteinRadius(LENS_GRID, kappaBar0, kappaOf(params));
+      // Grow the κ̄ axis by whole decades when the halo needs it, never below 10.
+      const top = sigmaBarMax / sigmaCr;
+      kappaPlot.y = { ...kappaPlot.y, max: Number.isFinite(top) && top > 10 ? 10 ** Math.ceil(Math.log10(top)) : 10 };
+    }
+
+    // --- charts --------------------------------------------------------------------------
+    const profilePlot = new Plot(canvas('profile'), {
+      x: { min: 0.01, max: 100, log: true, label: 'Radius r (kpc)' },
+      y: { min: 1e3, max: 1e10, log: true, label: 'ρ (M☉/kpc³)' },
+    });
+    const rhoPlot = new Plot(canvas('rho0'), {
+      x: { min: 0, max: T_LENS, label: '' },
+      y: { min: 1e7, max: 1e10, log: true, label: 'ρ(0) (M☉/kpc³)' },
+      margin: { bottom: 26 },
+    });
+    const rcPlot = new Plot(canvas('rc'), {
+      x: { min: 0, max: T_LENS, label: 'Time t (Gyr)' },
+      y: { min: 0.1, max: 10, log: true, label: 'r_c (kpc)' },
+    });
+    const kappaPlot = new Plot(canvas('kappa'), {
+      x: { min: 0.01, max: 100, log: true, label: 'Projected radius R (kpc)' },
+      y: { min: 1e-3, max: 10, log: true, label: 'Mean convergence κ̄(<R)' },
+    });
+
+    const [NOW, BEFORE, MARK] = [SERIES[0], SERIES[1], SERIES[2]];
+
+    function drawProfile() {
+      const p = profilePlot;
+      p.begin();
+      p.line(radii, radii.map((r) => density(halo, r)), { color: BEFORE, dash: [6, 4], width: 1.6 });
+      p.line(radii, radii.map((r) => density(profile, r)), { color: NOW, width: 2.2 });
+      if (profile.rC > p.x.min) {
+        p.rule('x', profile.rC, { color: MARK, dash: [3, 3], width: 1 });
+        p.points([profile.rC], [density(profile, profile.rC)], { color: MARK, radius: 4 });
+        p.text(profile.rC, p.y.min, 'r_c', { color: MARK, dx: 5, dy: -10 });
+      }
+      p.legend(
+        [
+          { label: 'Initial NFW', color: BEFORE, dash: [6, 4] },
+          { label: params.model === 'cdm' ? 'CDM now' : 'SIDM now', color: NOW },
+        ],
+        'top-right',
+      );
+    }
+
+    function drawTimeline(p: Plot, ys: Float64Array, color: string) {
+      p.begin();
+      if (!Number.isFinite(tc)) {
+        p.text((p.x.min + p.x.max) / 2, Math.sqrt(p.y.min * p.y.max), 'No evolution without self-interaction', { align: 'center' });
+        return;
+      }
+      if (tc <= span) {
+        p.rule('x', tc, { color: MARK, dash: [4, 3] });
+        p.text(tc, p.y.max, 't_c', { color: MARK, dx: 5, dy: 10 });
+        endNote(p);
+      }
+      p.line(hist.t, ys, { color, width: 2 });
+      p.rule('x', params.t, { color: p.theme.ink, width: 1 });
+    }
+
+    // Past t_c the curves stop, because the model does. Say so in the empty strip between t_c and the
+    // end of the axis, centred, on one line if it fits, else on two or three.
+    const END_NOTE = [['model ends at τ = 1'], ['model ends', 'at τ = 1'], ['model', 'ends at', 'τ = 1']];
+    const measure = document.createElement('canvas').getContext('2d')!;
+    function endNote(p: Plot) {
+      const room = p.px(span) - p.px(tc) - 8;
+      measure.font = `500 12px ${p.theme.font}`;
+      const widest = (lines: string[]) => Math.max(...lines.map((l) => measure.measureText(l).width));
+      const lines = END_NOTE.find((ls) => widest(ls) <= room) ?? END_NOTE[END_NOTE.length - 1];
+      const mid = Math.sqrt(p.y.min * p.y.max); // log axis
+      lines.forEach((line, i) =>
+        p.text((tc + span) / 2, mid, line, { align: 'center', color: p.theme.muted, dy: (i - (lines.length - 1) / 2) * 15 }),
+      );
+    }
+
+    function drawRho() {
+      drawTimeline(rhoPlot, hist.rho0, NOW);
+    }
+    function drawRc() {
+      drawTimeline(rcPlot, hist.rC, BEFORE);
+    }
+
+    function drawKappa() {
+      const p = kappaPlot;
+      const target = 1 - kappaOf(params);
+      p.begin();
+      p.rule('y', target, { color: p.theme.muted, dash: [4, 3] });
+      p.text(p.x.max, target, '1 − κ_c', { align: 'right', dx: -6, dy: -9, color: p.theme.muted });
+      p.line(LENS_GRID, kappaBar0, { color: BEFORE, dash: [6, 4], width: 1.6 });
+      p.line(LENS_GRID, kappaBar, { color: NOW, width: 2.2 });
+      if (resolved(thetaE0)) p.points([thetaE0], [target], { color: BEFORE, radius: 3.5 });
+      if (resolved(thetaE)) {
+        p.rule('x', thetaE, { color: MARK, dash: [3, 3], width: 1 });
+        p.points([thetaE], [target], { color: MARK, radius: 4.5 });
+      }
+      p.legend(
+        [
+          { label: 'Initial NFW', color: BEFORE, dash: [6, 4] },
+          { label: params.model === 'cdm' ? 'CDM now' : 'SIDM now', color: NOW },
+        ],
+        'top-right',
+      );
+    }
+
+    // --- readouts and controls -----------------------------------------------------------
+    const num = (key: string, text: string) => {
+      const el = panel.querySelector(`[data-num="${key}"]`);
+      if (el) el.textContent = text;
+    };
+    const arcsec = kpcPerArcsec(Z_LENS);
+    /** Einstein radii below 0.01″ come from an NFW cusp and depend only on how far in the grid goes. */
+    const MIN_EINSTEIN = 0.01; // arcsec
+    const resolved = (r: number) => r / arcsec >= MIN_EINSTEIN;
+    const fmtEinstein = (r: number) =>
+      r <= 0 ? 'none' : resolved(r) ? `${sig(r / arcsec)}″ (${sig(r)} kpc)` : '< 0.01″ (unresolved cusp)';
+
+    /** Slider position for each parameter. A frozen slider sits at the value its model uses. */
+    const POSITION: Record<Key, (p: Params) => number> = {
+      logM: (p) => p.logM,
+      c: (p) => p.c,
+      sigma: (p) => (p.model === 'cdm' ? 0 : stepOfSigma(p.sigma)),
+      t: (p) => Math.round((p.t / span) * STEPS),
+      kappaC: kappaOf,
+      zs: (p) => p.zs,
+    };
+
+    function syncControls() {
+      for (const radio of radios) radio.checked = radio.value === (radio.name === 'sidm-model' ? params.model : params.env);
+      const cdm = params.model === 'cdm';
+      setFrozen(slider('sigma'), cdm, WHY.sigma);
+      setFrozen(slider('t'), cdm, WHY.t);
+      setFrozen(slider('kappaC'), params.env === 'isolated', WHY.kappaC);
+      playButton.disabled = cdm;
+      playButton.title = cdm ? WHY.t : '';
+      for (const input of inputs) {
+        const key = input.dataset.param as Key;
+        input.value = String(POSITION[key](params));
+        const text = FORMAT[key](params, tc);
+        input.setAttribute('aria-valuetext', text);
+        const out = panel.querySelector<HTMLOutputElement>(`[data-out="${key}"]`);
+        if (out) out.value = text;
+      }
+    }
+
+    function syncReadouts() {
+      const evolving = Number.isFinite(tc);
+      // At τ = 1 exactly (t = t_c) the halo is at the end of the model, not past it.
+      const past = evolving && tau > TAU_MAX;
+      num('tc', fmtTc(tc));
+      num('tau', evolving ? fmtTau(tau) : '0');
+      num('phase', evolving ? phase(tau) : 'no self-interaction');
+      num('rc', profile.rC > 0 ? `${sig(profile.rC)} kpc` : '0 kpc');
+      const rho0 = centralDensity(profile);
+      num('rho0', Number.isFinite(rho0) ? `${sci(rho0)} M☉/kpc³` : 'infinite (NFW cusp)');
+      num('vmax', `${sig(peak.vmax)} km/s`);
+      num('rmax', `${sig(peak.rmax)} kpc`);
+      num('thetaE', fmtEinstein(thetaE));
+      num('thetaE0', fmtEinstein(thetaE0));
+      num('eff', eff.toFixed(3));
+      status.hidden = !past;
+      if (past) status.textContent = 'Past the collapse time: shown at its τ = 1 profile, where the model ends.';
+    }
+
+    // --- update loop -----------------------------------------------------------------------
+    let haloDirty = true;
+    let timeDirty = true;
+    let lensDirty = true;
+    let queued = false;
+    let playing = false;
+    let lastFrame = 0;
+
+    function invalidate(what: 'halo' | 'time' | 'lens') {
+      if (what === 'halo') haloDirty = true;
+      if (what !== 'lens') timeDirty = true;
+      lensDirty = true;
+      if (!queued) {
+        queued = true;
+        requestAnimationFrame(frame);
+      }
+    }
+
+    function frame(now: number) {
+      queued = false;
+      if (playing) {
+        // Cross the whole time axis in about ten seconds and stop at its end.
+        const dt = Math.min(Math.max(now - lastFrame, 0), 100) / 1000;
+        lastFrame = now;
+        params.t = Math.min(span, params.t + (span / 10) * dt);
+        timeDirty = lensDirty = true;
+        if (params.t >= span) setPlaying(false);
+      }
+      if (haloDirty) computeHalo();
+      if (timeDirty) computeTime();
+      if (lensDirty) computeLensing();
+      haloDirty = timeDirty = lensDirty = false;
+
+      syncControls();
+      syncReadouts();
+      profilePlot.redraw();
+      rhoPlot.redraw();
+      rcPlot.redraw();
+      kappaPlot.redraw();
+
+      if (playing && !queued) {
+        queued = true;
+        requestAnimationFrame(frame);
+      }
+    }
+
+    function setPlaying(on: boolean) {
+      playing = on;
+      playButton.setAttribute('aria-pressed', String(on));
+      playButton.textContent = on ? 'Pause' : 'Play';
+      if (on) {
+        if (params.t >= span * (1 - 1e-6)) params.t = 0;
+        lastFrame = performance.now();
+        invalidate('time');
+      }
+    }
+
+    panel.addEventListener('input', (ev) => {
+      const input = ev.target as HTMLInputElement;
+      if (input.name === 'sidm-model') {
+        // Switching keeps σ/m and t, so switching back restores them.
+        params.model = input.value as Model;
+        if (params.model === 'cdm') setPlaying(false);
+        invalidate('halo');
+        return;
+      }
+      if (input.name === 'sidm-env') {
+        params.env = input.value as Env;
+        invalidate('lens');
+        return;
+      }
+      const key = input.dataset.param as Key | undefined;
+      if (!key) return;
+      const v = Number(input.value);
+      if (key === 't') {
+        // The t_c position stands for t_c itself, so the mark and the slider land exactly on the collapse.
+        params.t = v === tcStep ? tc : (v / STEPS) * span;
+        if (playing) setPlaying(false);
+      } else if (key === 'sigma') {
+        params.sigma = sigmaAtStep(v);
+      } else {
+        params[key] = v;
+      }
+      invalidate(key === 'logM' || key === 'c' || key === 'sigma' ? 'halo' : key === 't' ? 'time' : 'lens');
+    });
+
+    // Play never starts by itself, so prefers-reduced-motion needs no special case: motion only follows a press.
+    playButton.addEventListener('click', () => setPlaying(!playing));
+    root.querySelector('[data-reset]')!.addEventListener('click', () => {
+      setPlaying(false);
+      Object.assign(params, DEFAULTS);
+      invalidate('halo');
+    });
+    root.querySelectorAll<HTMLButtonElement>('[data-preset]').forEach((button) => {
+      button.addEventListener('click', () => {
+        setPlaying(false);
+        PRESETS[button.dataset.preset!](params);
+        invalidate('halo');
+      });
+    });
+
+    // First computation, then hand the drawing functions to the charts (each redraws on resize and theme change).
+    computeHalo();
+    computeTime();
+    computeLensing();
+    haloDirty = timeDirty = lensDirty = false;
+    syncControls();
+    syncReadouts();
+    profilePlot.observe(drawProfile);
+    rhoPlot.observe(drawRho);
+    rcPlot.observe(drawRc);
+    kappaPlot.observe(drawKappa);
+  }
+
+  document.querySelectorAll<HTMLElement>('[data-sidm]').forEach(init);
+</script>
