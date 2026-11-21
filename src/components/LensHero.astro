@@ -1,0 +1,559 @@
+---
+// The hero: Webb's image of Abell S1063 with a cluster lens drawn over it.
+//
+// The lens model lives in src/lib/lens.ts: an elliptical cluster halo plus the
+// bright member galaxies found in the photograph. Two things are drawn from it:
+//
+//  - The critical curves and caustics for the main background galaxy (z = 2),
+//    traced on a fine grid when the site is built (src/lib/curves.ts) and
+//    shipped as an SVG overlay.
+//  - Three background galaxies and their lensed images, rendered in the
+//    browser by inverse ray shooting as on the kappaccino landing page: every
+//    cell of an image-plane grid is mapped back to each galaxy's source plane
+//    once (the deflection scaled for its redshift), and each frame only
+//    evaluates the galaxies' brightness there. The main galaxy (orange, z = 2)
+//    follows the pointer; a nearer blue one (z = 1.23) and a distant red one
+//    (z = 6.11) drift on their own. The result is added to the photograph as
+//    light (a canvas blended with `screen`), so the page still shows the plain
+//    image without JavaScript.
+//
+// Image: ESA/Webb potm2505a (CC BY 4.0), cropped on the right so the brightest
+// cluster galaxy sits right of centre.
+import { Image } from 'astro:assets';
+import sky from '../assets/abell-s1063-webb.jpg';
+import { site } from '../data/site';
+import { BCG, HALF } from '../lib/lens';
+import { lensCurves } from '../lib/curves';
+
+const curves = lensCurves();
+---
+
+<section
+  class="hero on-dark"
+  data-lens-hero
+  data-aspect={sky.width / sky.height}
+  style={`--bcg-x:${BCG.x * 100}%;--bcg-y:${BCG.y * 100}%`}
+>
+  <Image
+    class="sky"
+    src={sky}
+    alt="The galaxy cluster Abell S1063 observed with the James Webb Space Telescope: a bright central galaxy surrounded by cluster members and thin red arcs of lensed background galaxies."
+    widths={[960, 1600, 2400, 3200]}
+    sizes="max(100vw, 125vh)"
+    quality={74}
+    loading="eager"
+    fetchpriority="high"
+  />
+  <canvas class="arcs" data-arcs aria-hidden="true"></canvas>
+  <svg class="curves" data-curves viewBox={`${-HALF} ${-HALF} ${2 * HALF} ${2 * HALF}`} aria-hidden="true">
+    <path class="caustic" d={curves.caustic}></path>
+    <path class="critical" d={curves.critical}></path>
+  </svg>
+  <span class="marker" data-marker aria-hidden="true"></span>
+  <div class="scrim" aria-hidden="true"></div>
+
+  <div class="content">
+    <div class="intro">
+      <p class="label">{site.field}</p>
+      <h1>{site.name}</h1>
+      <p class="aff">{site.role} · {site.department} · {site.institution}</p>
+      <p class="lead">{site.lead}</p>
+      <p class="actions">
+        <a class="btn btn-primary" href="#research">Research</a>
+        <a class="btn" href="#publications">Publications</a>
+      </p>
+    </div>
+  </div>
+</section>
+
+<style>
+  .hero {
+    position: relative;
+    isolation: isolate;
+    display: flex;
+    min-height: max(100svh, 620px);
+    overflow: hidden;
+    background: #05050a;
+    cursor: crosshair;
+  }
+
+  .sky {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    /* With `cover`, aligning the galaxy's own position keeps it at this same
+       fraction of the hero at every window shape. */
+    object-position: var(--bcg-x) var(--bcg-y);
+    filter: brightness(0.86) saturate(1.05);
+    z-index: -4;
+  }
+
+  /* Both overlays are placed over the lens grid by the script. */
+  .arcs,
+  .curves {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+  }
+  .arcs {
+    z-index: -3;
+    mix-blend-mode: screen;
+  }
+  .curves {
+    z-index: -2;
+    opacity: 0.85;
+    overflow: visible;
+    transition: opacity 0.3s ease;
+  }
+  .curves path {
+    fill: none;
+    vector-effect: non-scaling-stroke;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+  }
+  .critical {
+    stroke: rgba(248, 210, 162, 0.92);
+    stroke-width: 1.3px;
+  }
+  .caustic {
+    stroke: rgba(255, 255, 255, 0.6);
+    stroke-width: 0.9px;
+  }
+
+  /* Where the main background galaxy would be seen without the lens. */
+  .marker {
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: -2;
+    width: 22px;
+    height: 22px;
+    margin: -11px 0 0 -11px;
+    border: 1.3px solid rgba(255, 255, 255, 0.75);
+    border-radius: 50%;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+  }
+  .hero[data-live] .marker {
+    opacity: 1;
+  }
+  .marker::before,
+  .marker::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    background: rgba(255, 255, 255, 0.75);
+  }
+  .marker::before {
+    width: 34px;
+    height: 1.3px;
+    transform: translate(-50%, -50%);
+    mask: linear-gradient(90deg, #000 0 8px, transparent 8px 26px, #000 26px);
+  }
+  .marker::after {
+    width: 1.3px;
+    height: 34px;
+    transform: translate(-50%, -50%);
+    mask: linear-gradient(180deg, #000 0 8px, transparent 8px 26px, #000 26px);
+  }
+
+  /* Darkens the left side for the text and fades the image into the page. */
+  .scrim {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      linear-gradient(180deg, rgba(5, 5, 10, 0.55) 0, transparent 130px),
+      linear-gradient(0deg, var(--hero-fade) 0, color-mix(in srgb, var(--hero-fade) 60%, transparent) 14%, transparent 36%),
+      linear-gradient(90deg, rgba(5, 5, 10, 0.82) 0, rgba(5, 5, 10, 0.55) 26%, transparent 52%);
+  }
+
+  .content {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: end;
+    width: min(1280px, 100% - 2 * var(--gutter));
+    margin-inline: auto;
+    padding-block: 110px clamp(40px, 7vh, 72px);
+  }
+
+  .intro {
+    max-width: 30rem;
+    align-self: center;
+  }
+  h1 {
+    margin-top: 16px;
+    font-size: clamp(3rem, 7vw, 5.4rem);
+    font-weight: 400;
+    font-variation-settings: 'SOFT' 60, 'WONK' 0, 'opsz' 144;
+    letter-spacing: -0.025em;
+    line-height: 1;
+    text-shadow: 0 2px 30px rgba(0, 0, 0, 0.6);
+  }
+  .aff {
+    margin-top: 18px;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .lead {
+    margin-top: 26px;
+    font-size: clamp(1.15rem, 1.7vw, 1.34rem);
+    line-height: 1.5;
+    color: var(--ink);
+    text-shadow: 0 1px 18px rgba(0, 0, 0, 0.7);
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 32px;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 12px 22px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    text-decoration: none;
+    color: var(--ink);
+    background: rgba(7, 7, 12, 0.35);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    transition:
+      border-color 0.15s ease,
+      background 0.15s ease,
+      transform 0.15s ease;
+  }
+  .btn:hover {
+    border-color: var(--amber);
+    transform: translateY(-1px);
+  }
+  .btn-primary {
+    background: var(--amber);
+    border-color: var(--amber);
+    color: #1d1206;
+  }
+  .btn-primary:hover {
+    background: var(--amber-bright);
+    border-color: var(--amber-bright);
+  }
+
+  @media (max-width: 860px) {
+    .hero {
+      cursor: default;
+    }
+    /* Lift the cluster into the upper part of a tall, narrow hero. */
+    .sky {
+      top: -26%;
+      height: 126%;
+    }
+    .scrim {
+      background:
+        linear-gradient(180deg, rgba(5, 5, 10, 0.5) 0, transparent 110px),
+        linear-gradient(
+          0deg,
+          var(--hero-fade) 0,
+          color-mix(in srgb, var(--hero-fade) 86%, transparent) 34%,
+          color-mix(in srgb, var(--hero-fade) 40%, transparent) 56%,
+          transparent 72%
+        );
+    }
+    .content {
+      grid-template-columns: 1fr;
+      align-content: end;
+      gap: 26px;
+      padding-block: 40svh 32px;
+    }
+    .intro {
+      align-self: end;
+    }
+  }
+</style>
+
+<script>
+  import { BCG, HALF, Z_SOURCE, deflect, efficiencyRatio } from '../lib/lens';
+
+  // Grid cells per side. The grid spans the whole photograph; narrow screens show less of it and get a
+  // lighter grid.
+  const N = window.matchMedia('(max-width: 860px)').matches ? 480 : 720;
+  const L = HALF; // half-width of the lens grid, in image widths
+  const H = (2 * L) / (N - 1);
+  const IDLE_MS = 3500;
+
+  // A background galaxy: a Gaussian disc plus a small offset Gaussian knot.
+  // Sizes and offsets are in image widths, colours are RGB at full brightness.
+  // Its drift is the Lissajous path x = ax cos(wx t + px), y = ay sin(wy t + py)
+  // around the cluster centre, with t in seconds.
+  interface Source {
+    z: number;
+    sigma: number;
+    knotSigma: number;
+    knotDx: number;
+    knotDy: number;
+    disc: readonly [number, number, number];
+    knot: readonly [number, number, number];
+    drift: { ax: number; wx: number; px: number; ay: number; wy: number; py: number };
+  }
+
+  // The first entry is the main galaxy: it follows the pointer, carries the
+  // marker, and the build-time curves are drawn for its redshift. It drifts
+  // only when the pointer has been idle for IDLE_MS. The others always drift,
+  // each on its own path, so they light up arcs at different times (their own
+  // caustics differ from the drawn ones, which are for the main galaxy).
+  const SOURCES: readonly Source[] = [
+    {
+      // A dusty red-orange disc with a pale star-forming knot, like the lensed
+      // arcs in the Webb image.
+      z: Z_SOURCE,
+      sigma: 0.0075,
+      knotSigma: 0.0034,
+      knotDx: 0.0085,
+      knotDy: -0.0046,
+      disc: [255, 122, 58],
+      knot: [255, 214, 170],
+      drift: { ax: 0.075, wx: 0.21, px: 0.4, ay: 0.05, wy: 0.29, py: 1.1 },
+    },
+    {
+      // A nearer, bluer star-forming galaxy.
+      z: 1.23,
+      sigma: 0.0065,
+      knotSigma: 0.003,
+      knotDx: -0.0072,
+      knotDy: 0.004,
+      disc: [140, 190, 255],
+      knot: [225, 238, 255],
+      drift: { ax: 0.095, wx: 0.13, px: 2.2, ay: 0.065, wy: 0.17, py: 0.3 },
+    },
+    {
+      // A small, distant galaxy, reddened by its redshift.
+      z: 6.11,
+      sigma: 0.0045,
+      knotSigma: 0.0021,
+      knotDx: 0.005,
+      knotDy: 0.0028,
+      disc: [255, 80, 60],
+      knot: [255, 165, 135],
+      drift: { ax: 0.06, wx: 0.19, px: 4.1, ay: 0.11, wy: 0.11, py: 2.7 },
+    },
+  ];
+  const S = SOURCES.length;
+
+  function init(hero: HTMLElement) {
+    const sky = hero.querySelector<HTMLImageElement>('.sky');
+    const arcs = hero.querySelector<HTMLCanvasElement>('[data-arcs]');
+    const curves = hero.querySelector<SVGElement>('[data-curves]');
+    const marker = hero.querySelector<HTMLElement>('[data-marker]');
+    const actx = arcs?.getContext('2d');
+    if (!sky || !arcs || !curves || !marker || !actx) return;
+
+    const aspect = Number(hero.dataset.aspect);
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    const P = N * N;
+    // Back-projected source-plane positions, one pair of arrays per galaxy.
+    const bxs: Float32Array[] = [];
+    const bys: Float32Array[] = [];
+    // Deflection for each galaxy's redshift relative to the one deflect() gives.
+    const ratio = new Float64Array(S);
+    for (let k = 0; k < S; k++) {
+      bxs.push(new Float32Array(P));
+      bys.push(new Float32Array(P));
+      ratio[k] = efficiencyRatio(SOURCES[k].z);
+    }
+
+    arcs.width = arcs.height = N;
+    const img = actx.createImageData(N, N);
+
+    // --- lens mapping ---------------------------------------------------------
+    // beta = theta - ratio * alpha, with alpha evaluated once per cell.
+    const a = [0, 0];
+    for (let j = 0; j < N; j++) {
+      const y = -L + j * H;
+      for (let i = 0; i < N; i++) {
+        const x = -L + i * H;
+        deflect(x, y, a);
+        const p = j * N + i;
+        for (let k = 0; k < S; k++) {
+          bxs[k][p] = x - ratio[k] * a[0];
+          bys[k][p] = y - ratio[k] * a[1];
+        }
+      }
+    }
+
+    // --- layout: place the lens grid over the cluster in the photograph -------
+    let boxLeft = 0;
+    let boxTop = 0;
+    let boxSize = 1;
+
+    function layout() {
+      const heroRect = hero.getBoundingClientRect();
+      const skyRect = sky!.getBoundingClientRect();
+      // `object-fit: cover` scales the image to fill its box on both axes.
+      const shown = Math.max(skyRect.width, skyRect.height * aspect);
+      boxSize = 2 * L * shown;
+      boxLeft = skyRect.left - heroRect.left + BCG.x * skyRect.width - boxSize / 2;
+      boxTop = skyRect.top - heroRect.top + BCG.y * skyRect.height - boxSize / 2;
+      for (const el of [arcs!, curves!]) {
+        el.style.width = el.style.height = `${boxSize}px`;
+        el.style.transform = `translate(${boxLeft}px, ${boxTop}px)`;
+      }
+      placeMarker();
+    }
+
+    // --- rendering ------------------------------------------------------------
+    // Source-plane positions of the galaxies; index 0 is the main one.
+    const sx = new Float64Array(S);
+    const sy = new Float64Array(S);
+    sx[0] = 0.025;
+    sy[0] = -0.01;
+
+    // Per-galaxy constants, unpacked so the per-pixel loop reads only numbers.
+    const inv2s = new Float64Array(S);
+    const inv2k = new Float64Array(S);
+    const cut = new Float64Array(S);
+    const kdx = new Float64Array(S);
+    const kdy = new Float64Array(S);
+    const disc = new Float64Array(3 * S);
+    const knot = new Float64Array(3 * S);
+    for (let k = 0; k < S; k++) {
+      const src = SOURCES[k];
+      inv2s[k] = 1 / (2 * src.sigma * src.sigma);
+      inv2k[k] = 1 / (2 * src.knotSigma * src.knotSigma);
+      cut[k] = 12 * src.sigma * src.sigma;
+      kdx[k] = src.knotDx;
+      kdy[k] = src.knotDy;
+      for (let c = 0; c < 3; c++) {
+        disc[3 * k + c] = src.disc[c];
+        knot[3 * k + c] = src.knot[c];
+      }
+    }
+
+    // Puts galaxy k where its drift path is at time t (seconds).
+    function driftTo(k: number, t: number) {
+      const d = SOURCES[k].drift;
+      sx[k] = d.ax * Math.cos(d.wx * t + d.px);
+      sy[k] = d.ay * Math.sin(d.wy * t + d.py);
+    }
+    // The other galaxies start on their paths, which is also where they stay
+    // when motion is reduced.
+    for (let k = 1; k < S; k++) driftTo(k, 0);
+
+    function placeMarker() {
+      const px = boxLeft + ((sx[0] + L) / (2 * L)) * boxSize;
+      const py = boxTop + ((sy[0] + L) / (2 * L)) * boxSize;
+      marker!.style.transform = `translate(${px}px, ${py}px)`;
+    }
+
+    function draw() {
+      const data = img.data;
+      for (let p = 0; p < P; p++) {
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        for (let k = 0; k < S; k++) {
+          const dx = bxs[k][p] - sx[k];
+          const dy = bys[k][p] - sy[k];
+          const d2 = dx * dx + dy * dy;
+          if (d2 < cut[k]) {
+            const s = Math.exp(-d2 * inv2s[k]);
+            const kx = dx - kdx[k];
+            const ky = dy - kdy[k];
+            const kn = Math.exp(-(kx * kx + ky * ky) * inv2k[k]);
+            const c = 3 * k;
+            r += disc[c] * s + knot[c] * kn;
+            g += disc[c + 1] * s + knot[c + 1] * kn;
+            b += disc[c + 2] * s + knot[c + 2] * kn;
+          }
+        }
+        const o = 4 * p;
+        data[o] = r > 255 ? 255 : r;
+        data[o + 1] = g > 255 ? 255 : g;
+        data[o + 2] = b > 255 ? 255 : b;
+        data[o + 3] = 255;
+      }
+      actx!.putImageData(img, 0, 0);
+      placeMarker();
+    }
+
+    // --- animation and input ----------------------------------------------------
+    let dirty = true;
+    let visible = true;
+    let lastInput = -1e9;
+    let raf = 0;
+    const t0 = performance.now();
+
+    function frame(now: number) {
+      raf = 0;
+      if (!reduceMotion) {
+        const t = (now - t0) / 1000;
+        // The other galaxies never stop drifting, so every visible frame is redrawn.
+        for (let k = 1; k < S; k++) {
+          driftTo(k, t);
+          dirty = true;
+        }
+        // Left alone, the main galaxy drifts across the caustics on its own.
+        if (now - lastInput > IDLE_MS) {
+          driftTo(0, t);
+          dirty = true;
+        }
+      }
+      if (dirty) {
+        draw();
+        dirty = false;
+      }
+      if (visible && !reduceMotion) schedule();
+    }
+    function schedule() {
+      if (!raf) raf = requestAnimationFrame(frame);
+    }
+    function moveTo(clientX: number, clientY: number) {
+      const rect = hero.getBoundingClientRect();
+      // The main galaxy goes wherever the pointer is, anywhere over the photograph.
+      sx[0] = ((clientX - rect.left - boxLeft) / boxSize) * 2 * L - L;
+      sy[0] = ((clientY - rect.top - boxTop) / boxSize) * 2 * L - L;
+      lastInput = performance.now();
+      dirty = true;
+      schedule();
+    }
+
+    // A mouse or pen steers the main galaxy as it moves; a finger places it with a
+    // tap, so that scrolling the page by touch is left alone.
+    hero.addEventListener('pointermove', (ev) => {
+      if (ev.pointerType !== 'touch') moveTo(ev.clientX, ev.clientY);
+    });
+    hero.addEventListener('click', (ev) => {
+      if ((ev.target as Element).closest('a')) return;
+      moveTo(ev.clientX, ev.clientY);
+    });
+
+    new ResizeObserver(layout).observe(hero);
+    new IntersectionObserver((entries) => {
+      visible = entries[0].isIntersecting;
+      if (visible) schedule();
+    }).observe(hero);
+
+    layout();
+    draw();
+    hero.setAttribute('data-live', '');
+    schedule();
+  }
+
+  document.querySelectorAll<HTMLElement>('[data-lens-hero]').forEach(init);
+</script>
