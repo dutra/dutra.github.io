@@ -1,0 +1,129 @@
+---
+import type { CollectionEntry } from 'astro:content';
+import { site } from '../data/site';
+
+interface Props {
+  pub: CollectionEntry<'publications'>;
+}
+const { data } = Astro.props.pub;
+const authors = data.author.split(',').map((a) => a.trim());
+---
+
+<article class="pub">
+  <p class="year">{data.date}</p>
+  <div class="body">
+    <h4>
+      {data.arxiv ? <a href={`https://arxiv.org/abs/${data.arxiv}`}>{data.title}</a> : data.title}
+    </h4>
+    <p class="authors">
+      {authors.map((a, i) => (
+        <>{a === site.name ? <strong>{a}</strong> : a}{i < authors.length - 1 ? ', ' : ''}</>
+      ))}
+    </p>
+    <p class="meta">
+      <span>{data.journal}</span>
+      {data.arxiv && <a href={`https://arxiv.org/abs/${data.arxiv}`}>arXiv:{data.arxiv}</a>}
+      {data.doi && <a href={`https://doi.org/${data.doi}`}>DOI</a>}
+    </p>
+    <details>
+      <summary>Abstract</summary>
+      <p>{data.description}</p>
+    </details>
+  </div>
+</article>
+
+<style>
+  .pub {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 20px;
+    padding-block: 24px;
+    border-top: 1px solid var(--line);
+  }
+  .year {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: 1.15rem;
+    color: var(--amber);
+    padding-top: 2px;
+  }
+  h4 {
+    margin: 0 0 6px;
+    font-family: var(--font-body);
+    font-weight: 560;
+    font-size: 1.16rem;
+    line-height: 1.35;
+    text-wrap: balance;
+  }
+  h4 a {
+    color: var(--ink);
+    text-decoration-color: transparent;
+  }
+  h4 a:hover {
+    color: var(--amber-bright);
+    text-decoration-color: currentColor;
+  }
+  .authors {
+    font-size: 0.93rem;
+    color: var(--ink-soft);
+    line-height: 1.5;
+  }
+  .authors strong {
+    font-weight: 620;
+    color: var(--ink);
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 16px;
+    margin-top: 6px;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    color: var(--muted);
+  }
+  details {
+    margin-top: 10px;
+  }
+  summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    cursor: pointer;
+    list-style: none;
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  summary::before {
+    content: '+';
+    display: inline-block;
+    width: 1ch;
+    color: var(--amber);
+    font-size: 15px;
+    line-height: 1;
+  }
+  details[open] summary::before {
+    content: '–';
+  }
+  summary:hover {
+    color: var(--ink);
+  }
+  details p {
+    margin-top: 10px;
+    max-width: var(--measure);
+    font-size: 0.97rem;
+    color: var(--ink-soft);
+  }
+  @media (max-width: 640px) {
+    .pub {
+      grid-template-columns: 1fr;
+      gap: 4px;
+    }
+  }
+</style>

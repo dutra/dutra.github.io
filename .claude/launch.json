@@ -1,0 +1,26 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "astro-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
+      "port": 4321
+    },
+    {
+      "name": "mockups",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4399",
+        "--directory",
+        "/private/tmp/claude-502/-Users-isaque-dutra-sync-personal-website-claude/83aeecc7-e85c-49bb-90c7-8e4993f33af9/scratchpad/mockups"
+      ],
+      "port": 4399
+    }
+  ]
+}

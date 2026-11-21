@@ -1,0 +1,128 @@
+---
+import { site } from '../data/site';
+
+interface Props {
+  /** The page opens on a dark region (the hero or the simulator), so the bar starts in its light-on-dark colours. */
+  darkTop?: boolean;
+}
+
+const { darkTop = false } = Astro.props;
+---
+
+<!-- The starting colours are set here so the bar is right before, or without, the script. -->
+<header class:list={['bar', { 'on-page': !darkTop }]} data-bar>
+  <div class="inner">
+    <a class="name" href="/">{site.name}</a>
+    <nav aria-label="Main navigation">
+      {site.nav.map((item) => <a href={item.href}>{item.label}</a>)}
+    </nav>
+  </div>
+</header>
+
+<script>
+  // The bar is clear at the top of the page and gains a backdrop once it scrolls. While a dark region
+  // (the hero, or a simulator stage) is underneath it, it keeps the dark colours; otherwise it takes the
+  // page's own. A dark region counts as underneath once its top edge has passed the bar's middle and
+  // until its bottom edge rises above the bar, so a stage lower on a light page only darkens the bar
+  // while it scrolls under it.
+  const bar = document.querySelector<HTMLElement>('[data-bar]');
+  if (bar) {
+    const dark = document.querySelectorAll<HTMLElement>('[data-lens-hero], [data-lens-lab]');
+    const update = () => {
+      const h = bar.offsetHeight;
+      const overDark = Array.from(dark).some((el) => {
+        const r = el.getBoundingClientRect();
+        return r.top <= h / 2 && r.bottom >= h;
+      });
+      bar.classList.toggle('scrolled', window.scrollY > 24);
+      bar.classList.toggle('on-page', !overDark);
+    };
+    update();
+    window.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update, { passive: true });
+  }
+</script>
+
+<style>
+  .bar {
+    position: fixed;
+    inset: 0 0 auto 0;
+    z-index: 50;
+    /* Hero colours by default; .on-page switches to the page's. */
+    --bar-ink: #f2ece2;
+    --bar-ink-soft: #cdc5b9;
+    --bar-bg: rgba(7, 7, 12, 0.78);
+    --bar-line: rgba(242, 236, 226, 0.12);
+    border-bottom: 1px solid transparent;
+    transition:
+      background 0.25s ease,
+      border-color 0.25s ease,
+      backdrop-filter 0.25s ease;
+  }
+  .bar.on-page {
+    --bar-ink: var(--ink);
+    --bar-ink-soft: var(--ink-soft);
+    --bar-bg: color-mix(in srgb, var(--bg) 80%, transparent);
+    --bar-line: var(--line);
+  }
+  .bar.scrolled {
+    background: var(--bar-bg);
+    backdrop-filter: blur(14px) saturate(1.2);
+    -webkit-backdrop-filter: blur(14px) saturate(1.2);
+    border-bottom-color: var(--bar-line);
+  }
+  .inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    width: min(1280px, 100% - 2 * var(--gutter));
+    margin-inline: auto;
+    height: 64px;
+  }
+  .name,
+  nav a {
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    text-decoration: none;
+  }
+  .name {
+    color: var(--bar-ink);
+    white-space: nowrap;
+  }
+  nav {
+    display: flex;
+    gap: clamp(14px, 2.6vw, 32px);
+  }
+  nav a {
+    color: var(--bar-ink-soft);
+    padding-block: 6px;
+    border-bottom: 1px solid transparent;
+  }
+  nav a:hover {
+    color: var(--bar-ink);
+    border-bottom-color: var(--amber);
+  }
+  @media (max-width: 640px) {
+    .name {
+      display: none;
+    }
+    .inner {
+      justify-content: center;
+      height: 54px;
+    }
+    /* Five uppercase links have to fit on one line down to about 320px. Measured with Inter's
+       metrics, they take about 0.81 of the viewport width at this size and tracking, plus the gaps;
+       11.5px with 0.12em tracking needed about 415px at 375px wide. */
+    nav {
+      gap: 2vw;
+    }
+    nav a {
+      font-size: min(11.5px, 2.6vw);
+      letter-spacing: 0.05em;
+    }
+  }
+</style>

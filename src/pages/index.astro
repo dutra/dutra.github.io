@@ -1,0 +1,251 @@
+---
+import { getCollection } from 'astro:content';
+import { Image } from 'astro:assets';
+import Base from '../layouts/Base.astro';
+import LensHero from '../components/LensHero.astro';
+import Publication from '../components/Publication.astro';
+import { site, about, research } from '../data/site';
+import portrait from '../assets/portrait.jpeg';
+
+// Newest first: by year, then by arXiv number within a year.
+const pubs = (await getCollection('publications')).sort(
+  (a, b) => Number(b.data.date) - Number(a.data.date) || (b.data.arxiv ?? '').localeCompare(a.data.arxiv ?? ''),
+);
+const groups = [
+  { id: 'first-author', label: 'First-author', list: pubs.filter((p) => p.data.first_author) },
+  { id: 'coauthored', label: 'Coauthored', list: pubs.filter((p) => !p.data.first_author) },
+].filter((g) => g.list.length > 0);
+
+const numerals = ['I', 'II', 'III', 'IV', 'V', 'VI'];
+---
+
+<Base darkTop>
+  <LensHero />
+
+  <section id="about" class="section">
+    <div class="wrap about">
+      <div>
+        <div class="section-head">
+          <p class="label">About</p>
+          <h2>Galaxy clusters as laboratories for dark matter</h2>
+        </div>
+        <div class="prose">
+          {about.map((p) => <p>{p}</p>)}
+        </div>
+      </div>
+      <figure class="portrait">
+        <Image src={portrait} alt="Isaque Dutra" width={360} height={360} densities={[1, 2]} />
+        <figcaption>New Haven, October 2026</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="research" class="section">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="label">Research</p>
+        <h2>Three questions</h2>
+      </div>
+      <ol class="questions">
+        {
+          research.map((item, i) => (
+            <li>
+              <span class="numeral" aria-hidden="true">{numerals[i]}</span>
+              <div>
+                <p class="topic">{item.topic}</p>
+                <h3>{item.question}</h3>
+                <p class="answer">{item.answer}</p>
+              </div>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+  </section>
+
+  <section id="publications" class="section">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="label">Publications</p>
+        <h2>Papers and preprints</h2>
+        <p class="count">
+          {groups.map((g) => `${g.list.length} ${g.label.toLowerCase()}`).join(' · ')}
+        </p>
+      </div>
+      {
+        groups.map((g) => (
+          <div class="group">
+            <h3 id={g.id}>{g.label}</h3>
+            {g.list.map((p) => <Publication pub={p} />)}
+          </div>
+        ))
+      }
+    </div>
+  </section>
+
+  <section id="contact" class="section">
+    <div class="wrap contact">
+      <div class="section-head">
+        <p class="label">Contact</p>
+        <h2>Get in touch</h2>
+      </div>
+      <p class="email"><a href={`mailto:${site.email}`}>{site.email}</a></p>
+      <p class="where">{site.department}, {site.institution}</p>
+      <ul class="links">
+        {site.links.map((l) => <li><a href={l.href}>{l.label}</a></li>)}
+      </ul>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .about {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 260px;
+    gap: clamp(32px, 6vw, 80px);
+    align-items: start;
+  }
+  .prose {
+    display: grid;
+    gap: 1.1em;
+    max-width: var(--measure);
+    color: var(--ink-soft);
+    font-size: 1.08rem;
+  }
+  .portrait {
+    margin: 6px 0 0;
+  }
+  .portrait img {
+    display: block;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    filter: saturate(0.92);
+  }
+  .portrait figcaption {
+    margin-top: 10px;
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: 0.9rem;
+    color: var(--muted);
+    text-align: right;
+  }
+
+  .questions {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .questions li {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 20px;
+    padding-block: clamp(28px, 4vw, 44px);
+    border-top: 1px solid var(--line);
+  }
+  .numeral {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: 2.6rem;
+    line-height: 1;
+    color: var(--amber);
+  }
+  .topic {
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .questions h3 {
+    font-size: clamp(1.45rem, 2.6vw, 1.95rem);
+    max-width: 26ch;
+  }
+  .answer {
+    margin-top: 16px;
+    max-width: var(--measure);
+    color: var(--ink-soft);
+  }
+
+  .count {
+    font-family: var(--font-ui);
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+  .group + .group {
+    margin-top: clamp(40px, 6vw, 64px);
+  }
+  .group h3 {
+    font-size: 1.5rem;
+    font-style: italic;
+    font-weight: 400;
+    margin-bottom: 16px;
+    scroll-margin-top: 90px;
+  }
+
+  .email {
+    font-family: var(--font-display);
+    font-size: clamp(1.5rem, 3.6vw, 2.3rem);
+  }
+  .email a {
+    color: var(--ink);
+  }
+  .email a:hover {
+    color: var(--amber-bright);
+  }
+  .where {
+    margin-top: 10px;
+    color: var(--ink-soft);
+  }
+  .links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    list-style: none;
+    margin: 28px 0 0;
+    padding: 0;
+  }
+  .links a {
+    display: inline-block;
+    padding: 9px 18px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    text-decoration: none;
+    color: var(--ink-soft);
+  }
+  .links a:hover {
+    border-color: var(--amber);
+    color: var(--ink);
+  }
+
+  @media (max-width: 760px) {
+    .about {
+      grid-template-columns: 1fr;
+    }
+    .portrait {
+      order: -1;
+      width: 150px;
+    }
+    .portrait figcaption {
+      text-align: left;
+    }
+    .questions li {
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+    .numeral {
+      font-size: 2rem;
+    }
+  }
+</style>
