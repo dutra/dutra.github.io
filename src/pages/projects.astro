@@ -1,0 +1,296 @@
+---
+import { Image } from 'astro:assets';
+import Base from '../layouts/Base.astro';
+import sky from '../assets/abell-s1063-webb.jpg';
+import { BCG, HALF } from '../lib/lens';
+import { lensCurves } from '../lib/curves';
+import ggsl from '../assets/projects/ggsl.svg';
+import sidm from '../assets/projects/sidm.svg';
+import agn from '../assets/projects/agn-hubble.svg';
+import darkEnergy from '../assets/projects/dark-energy.svg';
+
+// The Experiments section: interactive pages on this site. One entry per card. `image` is a photograph or an SVG drawing from src/assets/projects/;
+// `curves` draws the lens model's critical curves over a thumbnail of the Webb photograph.
+const projects = [
+  {
+    title: 'Cluster lens simulator',
+    href: '/lens/',
+    image: sky,
+    alt: 'The galaxy cluster Abell S1063 with the critical curves of a lens model drawn over it.',
+    curves: true,
+    summary:
+      'Strong lensing over the Webb image of Abell S1063. Drag background galaxies at different redshifts, change the cluster mass model, and see the critical curves, caustics and magnification maps update live.',
+    tags: ['Strong lensing', 'WebGL'],
+  },
+  {
+    title: 'Galaxy-galaxy strong lensing',
+    href: '/projects/ggsl/',
+    image: ggsl,
+    alt: 'Line drawing of a critical curve, a diamond-shaped caustic and lensed arcs.',
+    curves: false,
+    summary:
+      'One cluster member galaxy inside the cluster\'s convergence and shear. Change its mass and compactness and see how its critical curve, caustic and lensing cross-section respond.',
+    tags: ['Strong lensing', 'Dark matter'],
+  },
+  {
+    title: 'SIDM core collapse',
+    href: '/projects/sidm/',
+    image: sidm,
+    alt: 'Line drawing of three halo density profiles: cuspy, cored and collapsed.',
+    curves: false,
+    summary:
+      'A self-interacting dark matter halo through time: the core forms, then collapses. Follow its density profile and how strongly it would lens.',
+    tags: ['Dark matter', 'Lensing'],
+  },
+  {
+    title: 'AGN variability as a distance probe',
+    href: '/projects/agn-hubble/',
+    image: agn,
+    alt: 'Line drawing of a flickering light curve above a Hubble diagram.',
+    curves: false,
+    summary:
+      'A toy survey of flickering active galaxies. Measure how much each one varies, infer its luminosity, and build a Hubble diagram to compare dark energy models.',
+    tags: ['AGN', 'Cosmology'],
+  },
+  {
+    title: 'Dark energy explorer',
+    href: '/projects/dark-energy/',
+    image: darkEnergy,
+    alt: 'Line drawing of several smooth curves fanning out from a common point.',
+    curves: false,
+    summary:
+      'Change the dark energy equation of state and see what it does to the expansion history, to distances, and to the distance ratios measured by cluster lensing.',
+    tags: ['Cosmology', 'Lensing'],
+  },
+];
+
+// Research code, on GitHub. One entry per card; `paper` adds a link next to the GitHub one.
+const software = [
+  {
+    name: 'QVC',
+    href: 'https://github.com/dutra/qvc',
+    summary:
+      'Quasar Variability Cosmography: a new way to measure cosmic distances from the flickering of quasars. We fit multi-band AGN light curves with fast Gaussian processes, add joint spectral and SED fits, and build a Hubble diagram that reaches redshifts beyond supernovae. Together with supernovae it gives evidence for evolving dark energy.',
+    tags: ['AGN variability', 'Dark energy'],
+    paper: { label: 'arXiv:2512.07931', href: 'https://arxiv.org/abs/2512.07931', note: 'Paper submitted' },
+  },
+  {
+    name: 'Lumina',
+    href: 'https://github.com/dutra/lumina',
+    summary:
+      'Fast Bayesian mass models of galaxy-cluster lenses. The whole model is differentiable, so gradients steer the sampling and hundreds of parameters, including every member galaxy, can be fitted together. Mass the model leaves out is treated statistically, as a Gaussian random field or Gaussian process, instead of being ignored.',
+    tags: ['Cluster lensing', 'Differentiable', 'JAX'],
+  },
+  {
+    name: 'TNG Lens',
+    href: 'https://github.com/dutra/tnglens',
+    summary:
+      'Simulated cluster lenses where the answer is known. It turns TNG-Cluster halos into lensing maps and mock catalogs of multiple images, so lens models can be tested against clusters whose true mass distribution we have.',
+    tags: ['Simulations', 'Cluster lensing'],
+  },
+];
+
+const critical = lensCurves().critical;
+---
+
+<Base title="Projects" description="Research software for gravitational lensing and cosmology, and interactive experiments that run in the browser.">
+  <div class="wrap page">
+    <div class="section-head">
+      <p class="label">Research software</p>
+      <h1>Projects</h1>
+    </div>
+
+    <ul class="grid">
+      {
+        software.map((p) => (
+          <li>
+            <article class="card repo">
+              <div class="text">
+                <h3><a href={p.href} rel="noopener">{p.name}</a></h3>
+                <p>{p.summary}</p>
+                <p class="tags">{p.tags.join(' · ')}</p>
+                <p class="where">
+                  <a href={p.href} rel="noopener">GitHub ↗</a>
+                  {p.paper && <a href={p.paper.href} rel="noopener">{p.paper.label} ↗</a>}
+                  {p.paper?.note && <span>{p.paper.note}</span>}
+                </p>
+              </div>
+            </article>
+          </li>
+        ))
+      }
+    </ul>
+
+    <div class="section-head second">
+      <p class="label">Interactive, in the browser</p>
+      <h2>Experiments</h2>
+    </div>
+
+    <ul class="grid">
+      {
+        projects.map((p) => (
+          <li>
+            <a class="card" href={p.href}>
+              <div class="thumb on-dark" style={`--bcg-x:${BCG.x * 100}%;--bcg-y:${BCG.y * 100}%`}>
+                {p.image.format === 'svg' ? (
+                  <img src={p.image.src} alt={p.alt} width={p.image.width} height={p.image.height} loading="lazy" decoding="async" />
+                ) : (
+                  <Image src={p.image} alt={p.alt} widths={[360, 720]} sizes="360px" quality={70} />
+                )}
+                {p.curves && (
+                  <svg viewBox={`${-HALF} ${-HALF} ${2 * HALF} ${2 * HALF}`} aria-hidden="true">
+                    <path d={critical} />
+                  </svg>
+                )}
+              </div>
+              <div class="text">
+                <h3>{p.title}</h3>
+                <p>{p.summary}</p>
+                <p class="tags">{p.tags.join(' · ')}</p>
+              </div>
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+</Base>
+
+<style>
+  /* Top padding clears the fixed 64px header. */
+  .page {
+    padding-block: calc(64px + clamp(40px, 6vw, 80px)) clamp(64px, 9vw, 112px);
+  }
+  .section-head {
+    margin-bottom: clamp(28px, 4vw, 44px);
+  }
+  h1,
+  h2 {
+    font-size: clamp(2rem, 4.2vw, 3rem);
+  }
+  .section-head.second {
+    margin-top: clamp(56px, 8vw, 96px);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+    gap: 24px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .card {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    border: 1px solid var(--line-strong);
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--bg-raised);
+    color: inherit;
+    text-decoration: none;
+    transition:
+      border-color 0.15s ease,
+      transform 0.15s ease;
+  }
+  .card:hover {
+    border-color: var(--amber);
+    transform: translateY(-2px);
+  }
+
+  /* The photograph fills the width; the curves are placed over the cluster the same way as in the hero. */
+  .thumb {
+    position: relative;
+    aspect-ratio: 16 / 10;
+    overflow: hidden;
+    container-type: inline-size;
+    background: #05050a;
+  }
+  .thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: var(--bcg-x) var(--bcg-y);
+  }
+  .thumb svg {
+    position: absolute;
+    width: calc(2 * 0.6 * 100cqw);
+    aspect-ratio: 1;
+    left: calc(var(--bcg-x) - 0.6 * 100cqw);
+    top: calc(var(--bcg-y) - 0.6 * 100cqw);
+    overflow: visible;
+  }
+  .thumb path {
+    fill: none;
+    stroke: rgba(248, 210, 162, 0.92);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .text {
+    display: grid;
+    gap: 8px;
+    padding: 18px 20px 20px;
+  }
+  h3 {
+    font-family: var(--font-display);
+    font-weight: 480;
+    font-size: 1.3rem;
+    line-height: 1.2;
+    margin: 0;
+  }
+  /* A repository card has no picture; its name is set in the UI face, like code. */
+  .repo h3 {
+    font-family: var(--font-ui);
+    font-weight: 600;
+    font-size: 1.15rem;
+    letter-spacing: 0.01em;
+  }
+  .repo .text {
+    height: 100%;
+    grid-template-rows: auto 1fr auto auto;
+  }
+  .text .where {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+  }
+  .where a {
+    color: var(--amber);
+    text-decoration: none;
+  }
+  .where a:hover {
+    text-decoration: underline;
+  }
+  .where span {
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .repo h3 a {
+    color: inherit;
+    text-decoration: none;
+  }
+  /* A repository card is not one big link (it holds two), so only its border reacts. */
+  .repo:hover {
+    transform: none;
+  }
+  .text p {
+    font-size: 0.92rem;
+    line-height: 1.55;
+    color: var(--ink-soft);
+  }
+  .text .tags {
+    margin-top: 4px;
+    font-family: var(--font-ui);
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+</style>
