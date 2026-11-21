@@ -1,0 +1,1209 @@
+---
+// The dark energy explorer: how a dark energy equation of state,
+// w(z) = w0 + wa z / (1 + z), changes the expansion history, the distances that
+// supernovae measure, and the distance ratios that cluster strong lensing with
+// several source redshifts measures.
+//
+//  - src/lib/cpl.ts   the cosmology (flat, matter plus CPL dark energy)
+//  - src/lib/plot.ts  the canvas charts
+//
+// A model selector (ΛCDM, wCDM, CPL) freezes the parameters the model fixes
+// and marks the Planck 2018 and DESI DR2 fits for that model on the sliders
+// (src/lib/controls.ts). Controls are bound by their data-param attributes; one rAF-coalesced update
+// rebuilds the two cosmologies (the chosen one and ΛCDM with the same Ωm and H0)
+// and redraws every chart. The charts come in three groups: dark energy itself,
+// shapes against ΛCDM with the same Ωm and H0 (H0 cancels), and absolute scales
+// against two fixed references, the Planck 2018 ΛCDM fit and the DESI DR2 fit for
+// the selected model (H0 matters), both taken from the FITS table below.
+import Base from '../../layouts/Base.astro';
+import '../../styles/tools.css';
+import { Z_LENS } from '../../lib/lens/model';
+---
+
+<Base
+  title="Dark energy explorer"
+  description="Change the dark energy equation of state and see what it does to the expansion history, to supernova distances and to strong-lensing distance ratios."
+>
+  <div class="tool" data-de>
+    <div class="tool-head">
+      <a class="tool-back" href="/projects/">Projects</a>
+      <h1>Dark energy explorer</h1>
+      <p class="intro">
+        Three models of dark energy: a cosmological constant (ΛCDM), a constant equation of state w (wCDM), and one that
+        changes with time, w(z) = w<sub>0</sub> + w<sub>a</sub> z/(1 + z) (CPL). The charts come in three groups: dark
+        energy itself; the shapes of distances, compared with a cosmological constant with the same matter density and
+        Hubble constant, so that H<sub>0</sub> cancels; and absolute scales, compared with the Planck 2018 ΛCDM fit held
+        fixed, where H<sub>0</sub> matters. Each chart shows what one kind of measurement would see. The page opens on the
+        DESI DR2 w<sub>0</sub>w<sub>a</sub> fit; it is a published fit to explore, not a claim about the true cosmology.
+      </p>
+    </div>
+
+    <div class="tool-body">
+      <form class="tool-panel" aria-label="Cosmology controls" onsubmit="return false">
+        <fieldset>
+          <legend>Cosmology</legend>
+          <div class="tool-models" role="radiogroup" aria-label="Dark energy model">
+            <label title="ΛCDM: a cosmological constant, w = −1 at all times">
+              <input type="radio" name="de-model" value="lcdm" /><span>ΛCDM</span>
+            </label>
+            <label title="wCDM: a constant equation of state, w = w0 at all times">
+              <input type="radio" name="de-model" value="wcdm" /><span>wCDM</span>
+            </label>
+            <label title="w0waCDM (CPL): w(a) = w0 + wa(1 − a)">
+              <input type="radio" name="de-model" value="cpl" /><span>CPL</span>
+            </label>
+          </div>
+          <p class="de-fixed" data-model-note aria-live="polite"></p>
+          <label class="tool-row">
+            <span><span>Matter density Ω<sub>m</sub></span> <output data-out="omegaM"></output></span>
+            <input type="range" data-param="omegaM" min="0.1" max="0.5" step="0.0001" />
+          </label>
+          <label class="tool-row">
+            <span><span>Hubble constant H<sub>0</sub></span> <output data-out="h0"></output></span>
+            <input type="range" data-param="h0" min="60" max="80" step="0.01" />
+          </label>
+          <p class="de-fixed de-hint">
+            H<sub>0</sub> changes the four absolute-scale charts and the age; it cancels in the others.
+          </p>
+          <label class="tool-row">
+            <span><span>w<sub>0</sub> (today)</span> <output data-out="w0"></output></span>
+            <input type="range" data-param="w0" min="-2" max="0" step="0.001" />
+          </label>
+          <label class="tool-row">
+            <span><span>w<sub>a</sub> (evolution)</span> <output data-out="wa"></output></span>
+            <input type="range" data-param="wa" min="-3" max="2" step="0.01" />
+          </label>
+          <p class="de-fixed de-hint">Marks under the sliders: the published fits for this model. Click one to go there.</p>
+          <div class="tool-buttons" aria-label="Published fits for this model">
+            <button type="button" class="tool-button" data-fit="planck">Planck 2018</button>
+            <button type="button" class="tool-button" data-fit="desi">DESI DR2</button>
+          </div>
+          <p class="de-fixed de-hint" data-fit-note aria-live="polite" hidden></p>
+        </fieldset>
+
+        <fieldset>
+          <legend>Lensing</legend>
+          <p class="de-fixed">Lens redshift z<sub>l</sub> = {Z_LENS} (Abell S1063)</p>
+          <label class="tool-row">
+            <span><span>Source redshift z<sub>1</sub></span> <output data-out="z1"></output></span>
+            <input type="range" data-param="z1" min="0.4" max="6" step="0.01" />
+          </label>
+          <label class="tool-row">
+            <span><span>Source redshift z<sub>2</sub></span> <output data-out="z2"></output></span>
+            <input type="range" data-param="z2" min="0.4" max="6" step="0.01" />
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>This model</legend>
+          <dl class="tool-numbers">
+            <div><dt>Age of the Universe</dt><dd data-num="age">–</dd></div>
+            <div><dt>Deceleration q<sub>0</sub></dt><dd data-num="q0">–</dd></div>
+            <div><dt>Acceleration began at</dt><dd data-num="zacc">–</dd></div>
+            <div><dt>w today</dt><dd data-num="wNow">–</dd></div>
+            <div><dt>w at z = 1</dt><dd data-num="w1">–</dd></div>
+            <div><dt>Δμ at z = 1</dt><dd data-num="dmu1">–</dd></div>
+            <div><dt>Ξ(z<sub>1</sub>) / Ξ(z<sub>2</sub>)</dt><dd data-num="family">–</dd></div>
+            <div><dt>Shift from ΛCDM</dt><dd data-num="shift">–</dd></div>
+          </dl>
+          <p class="de-status" data-status role="status" hidden></p>
+          <div class="tool-buttons">
+            <button type="button" class="tool-button" data-reset>Reset</button>
+          </div>
+        </fieldset>
+      </form>
+
+      <div class="tool-figures de-figures">
+        <div class="de-group">
+          <h2>1. Dark energy itself</h2>
+        </div>
+        <figure class="tool-figure">
+          <figcaption>Equation of state w(z), against ΛCDM's w = −1</figcaption>
+          <canvas data-plot="w" role="img" aria-label="Dark energy equation of state against redshift, for this model and for a cosmological constant."></canvas>
+        </figure>
+        <figure class="tool-figure">
+          <figcaption>Dark energy density relative to its value today (ΛCDM: constant)</figcaption>
+          <canvas data-plot="rho" role="img" aria-label="Dark energy density relative to today against redshift, logarithmic scale."></canvas>
+        </figure>
+
+        <div class="de-group">
+          <h2>2. Shapes, where H<sub>0</sub> cancels</h2>
+          <p>
+            Both charts compare the model with ΛCDM with the same Ω<sub>m</sub> and H<sub>0</sub>, and
+            H<sub>0</sub> cancels in both, so moving it changes nothing here.
+          </p>
+        </div>
+        <figure class="tool-figure">
+          <figcaption>Shape of the Hubble diagram: Δμ = μ − μ<sub>ΛCDM</sub>, ΛCDM with the same Ω<sub>m</sub> and H<sub>0</sub> (H<sub>0</sub> cancels)</figcaption>
+          <canvas data-plot="dmu" role="img" aria-label="Distance modulus of this model minus that of ΛCDM with the same matter density and Hubble constant, in magnitudes, against redshift."></canvas>
+        </figure>
+        <figure class="tool-figure">
+          <figcaption>Lensing distance ratio Ξ = D<sub>ls</sub>/D<sub>s</sub>, relative to ΛCDM with the same Ω<sub>m</sub></figcaption>
+          <canvas data-plot="xi" role="img" aria-label="Lensing distance ratio for a lens at the cluster redshift, divided by its value in ΛCDM with the same matter density, against source redshift."></canvas>
+        </figure>
+
+        <div class="de-group">
+          <h2>3. Absolute scales, where H<sub>0</sub> matters</h2>
+          <p>
+            Each chart compares the model (solid) with the Planck 2018 ΛCDM fit, held fixed, and with the DESI DR2 fit for
+            the selected model; both fits are in the table below. Lensing charts use the lens at z<sub>l</sub> = {Z_LENS}.
+          </p>
+        </div>
+        <figure class="tool-figure">
+          <figcaption>Expansion rate H(z)/(1 + z), the rate of change of the scale factor</figcaption>
+          <canvas data-plot="hz" role="img" aria-label="H(z) divided by 1 + z in km/s/Mpc against redshift, for this model, the Planck 2018 ΛCDM fit and the DESI DR2 fit."></canvas>
+          <p class="de-figure-note">
+            Its minimum (dot) is where the expansion starts to accelerate. BAO and cosmic chronometers measure H(z).
+          </p>
+        </figure>
+        <figure class="tool-figure">
+          <figcaption>Absolute Hubble diagram: μ − μ<sub>Planck ΛCDM</sub> (H<sub>0</sub> shifts it by 5 log<sub>10</sub>(H<sub>0,Planck</sub>/H<sub>0</sub>))</figcaption>
+          <canvas data-plot="muAbs" role="img" aria-label="Distance modulus of this model minus that of the Planck 2018 ΛCDM fit, in magnitudes, against redshift."></canvas>
+          <p class="de-figure-note">
+            What a distance indicator with an independently known zero-point sees. Without that calibration the constant
+            offset cannot be told apart from the zero-point, which is why supernovae alone do not measure H<sub>0</sub>.
+          </p>
+        </figure>
+        <figure class="tool-figure">
+          <figcaption>Time-delay distance D<sub>Δt</sub> = (1 + z<sub>l</sub>) D<sub>l</sub>D<sub>s</sub>/D<sub>ls</sub>, relative to Planck ΛCDM (∝ 1/H<sub>0</sub>)</figcaption>
+          <canvas data-plot="ddt" role="img" aria-label="Time-delay distance for a lens at the cluster redshift, divided by its value in the Planck 2018 ΛCDM fit, against source redshift."></canvas>
+          <p class="de-figure-note">
+            What the time delays between the images of a variable source (a lensed quasar, AGN or supernova) measure; the
+            delays also depend on the lens mass model.
+          </p>
+          <dl class="tool-numbers de-readout">
+            <div><dt>D<sub>Δt</sub>, source at z<sub>1</sub></dt><dd data-num="ddt1">–</dd></div>
+            <div><dt>Relative to Planck ΛCDM</dt><dd data-num="ddtRatio">–</dd></div>
+            <div><dt>A 100-day delay in Planck ΛCDM is here</dt><dd data-num="delay">–</dd></div>
+          </dl>
+        </figure>
+        <figure class="tool-figure">
+          <figcaption>Critical surface density Σ<sub>cr</sub> = c²D<sub>s</sub>/(4πG D<sub>l</sub>D<sub>ls</sub>), relative to Planck ΛCDM (∝ H<sub>0</sub>)</figcaption>
+          <canvas data-plot="sig" role="img" aria-label="Critical surface density for a lens at the cluster redshift, divided by its value in the Planck 2018 ΛCDM fit, against source redshift."></canvas>
+          <p class="de-figure-note">
+            A lens model fits the convergence Σ/Σ<sub>cr</sub>, so the masses it gives scale with the assumed cosmology as
+            Σ<sub>cr</sub> D<sub>l</sub>², which is ∝ 1/H<sub>0</sub>.
+          </p>
+          <dl class="tool-numbers de-readout">
+            <div><dt>Σ<sub>cr</sub>, source at z<sub>1</sub></dt><dd data-num="sig1">–</dd></div>
+            <div><dt>Mass inside θ<sub>E</sub> = 30″</dt><dd data-num="mass">–</dd></div>
+            <div><dt>Change from Planck ΛCDM</dt><dd data-num="massShift">–</dd></div>
+          </dl>
+        </figure>
+      </div>
+    </div>
+
+    <div class="tool-notes">
+      <h2>What this shows</h2>
+      <p>
+        Dark energy's equation of state w is the ratio of its pressure to its energy density. A cosmological constant has w =
+        −1 at all times, so its density never changes. With w &gt; −1 the density falls as the Universe expands, so it was
+        higher in the past; with w &lt; −1 (phantom) it grows. Crossing w = −1, the phantom divide, is allowed in this
+        description, though a single canonical scalar field cannot do it.
+      </p>
+      <p>
+        The expansion rate H(z) sets every distance. Standard candles such as type Ia supernovae measure the luminosity
+        distance through the distance modulus μ; the Δμ chart in the second group shows how much brighter (negative Δμ) or
+        fainter (positive) a source would look in this model than with a cosmological constant with the same
+        Ω<sub>m</sub> and H<sub>0</sub>. A difference of a few hundredths of a magnitude is what current supernova samples can detect when
+        averaged over many objects.
+      </p>
+      <p>
+        A strong lens deflects light by an angle proportional to Ξ = D<sub>ls</sub>/D<sub>s</sub>. For one cluster with lensed galaxies at two redshifts, the ratio of lensing efficiencies Ξ(z<sub>1</sub>)/Ξ(z<sub>2</sub>) depends only on the cosmology, but measuring it requires fitting the cluster's mass model at the same time, and degeneracies between the mass model and the cosmology limit the precision. The effect is small: at most about one per cent for the published fits marked on the sliders (up to 1.0 per cent for the DESI DR2 CPL fit when one source sits just behind the lens, at z = 0.4; the same fit shifts the ratio by −0.11 per cent for the default source redshifts), though it grows at extreme slider settings, to about 19 per cent at the corners of the ranges. It is a ratio of distances, so it does not depend on H<sub>0</sub>.
+      </p>
+      <p>
+        In the first two groups H<sub>0</sub> cancels: w(z) and the dark energy density do not involve it, and Δμ and Ξ compare distances with those of a cosmological constant with the same H<sub>0</sub>, so every distance scales by the same factor c/H<sub>0</sub>. The third group compares absolute quantities with one fixed reference, the Planck 2018 ΛCDM fit, so H<sub>0</sub> matters there. The expansion rate H(z)/(1 + z) is the rate of change of the scale factor, ȧ; it falls while the expansion decelerates and rises once it accelerates, so its minimum marks the onset of acceleration. BAO and cosmic chronometers measure H(z). The absolute Hubble diagram is what a distance indicator with an independently known zero-point sees: H<sub>0</sub> shifts it by a constant 5 log<sub>10</sub>(H<sub>0,Planck</sub>/H<sub>0</sub>) on top of the difference in shape from Planck ΛCDM, which is the second group's Δμ only when Ω<sub>m</sub> equals Planck's 0.3153. Without such a calibration the constant cannot be told apart from the zero-point, which is why supernovae alone do not measure H<sub>0</sub>.
+      </p>
+      <p>
+        The two lensing charts of the third group use the same lens. When a variable source, such as a lensed quasar, AGN or supernova, is imaged several times, the delays between the images are D<sub>Δt</sub>/c times a difference of Fermat potentials set by the lens mass model; for a fixed lens model they scale with D<sub>Δt</sub>, which is ∝ 1/H<sub>0</sub> (Refsdal 1964). The delays also depend on the mass model, which is the main limitation of the method. The critical surface density Σ<sub>cr</sub> converts the convergence a lens model fits into a surface mass density, so the mass a lens model gives inside a fixed Einstein radius, M = π(θ<sub>E</sub>D<sub>l</sub>)²Σ<sub>cr</sub>, depends on the assumed cosmology as D<sub>l</sub>D<sub>s</sub>/D<sub>ls</sub>, which is ∝ 1/H<sub>0</sub>.
+      </p>
+
+      <h2>Model and assumptions</h2>
+      <ul>
+        <li>
+          A flat universe with matter and dark energy only. Radiation is left out: with Ω<sub>r</sub> ≈ 9 × 10<sup>−5</sup> it would change distances by less than 0.05 per cent out to z = 10, and the expansion rate itself by 0.17 per cent at z = 10.
+        </li>
+        <li>
+          The dark energy equation of state is w(a) = w<sub>0</sub> + w<sub>a</sub>(1 − a), with a = 1/(1 + z) the scale
+          factor (Chevallier &amp; Polarski 2001; Linder 2003). w<sub>0</sub> is its value today and w<sub>0</sub> +
+          w<sub>a</sub> its value in the distant past. Then H(z)² = H<sub>0</sub>²[Ω<sub>m</sub>(1 + z)³ + (1 −
+          Ω<sub>m</sub>)(1 + z)<sup>3(1 + w<sub>0</sub> + w<sub>a</sub>)</sup> e<sup>−3w<sub>a</sub>z/(1 + z)</sup>].
+        </li>
+        <li>
+          In the first two groups the dashed reference is a cosmological constant with the same Ω<sub>m</sub> and H<sub>0</sub>, in every model. In
+          the ΛCDM model it is the model itself, so the Δμ and Ξ charts are flat at zero, and Ω<sub>m</sub> and
+          H<sub>0</sub> show only in the age, q<sub>0</sub>, the onset of acceleration and the third group. Real fits do not work this way: when
+          w<sub>0</sub> and w<sub>a</sub> change, Ω<sub>m</sub> and H<sub>0</sub> shift too, to keep matching the
+          best-measured distances, so the differences shown here are larger than those between models that fit the same data
+          equally well. Compare the published fits below: each model's fit has its own Ω<sub>m</sub> and H<sub>0</sub>.
+        </li>
+        <li>
+          In the third group the references are fixed: the Planck 2018 ΛCDM fit (dashed) and the DESI DR2 fit for the
+          selected model (dotted): DESI + CMB for ΛCDM, DESI + CMB + DESY5 for wCDM and CPL. The charts show H(z)/(1 + z)
+          = H<sub>0</sub>E(z)/(1 + z) in km/s/Mpc; μ − μ<sub>Planck ΛCDM</sub>, which tends to 5 log<sub>10</sub>(H<sub>0,Planck</sub>/H<sub>0</sub>) as z → 0;
+          the time-delay distance D<sub>Δt</sub> = (1 + z<sub>l</sub>)D<sub>l</sub>D<sub>s</sub>/D<sub>ls</sub>; and the
+          critical surface density Σ<sub>cr</sub> = c²D<sub>s</sub>/(4πG D<sub>l</sub>D<sub>ls</sub>), the last two as
+          ratios to Planck ΛCDM for a lens at z<sub>l</sub> = {Z_LENS} against source redshift. All D are angular-diameter
+          distances. The readouts give D<sub>Δt</sub> and Σ<sub>cr</sub> for the source at z<sub>1</sub>, the delay that a
+          100-day delay in Planck ΛCDM becomes (100 days times the D<sub>Δt</sub> ratio, for the same lens model), and the
+          mass inside θ<sub>E</sub> = 30″, M = π(θ<sub>E</sub>D<sub>l</sub>)²Σ<sub>cr</sub> = c²θ<sub>E</sub>²D<sub>l</sub>D<sub>s</sub>/(4G D<sub>ls</sub>),
+          with G = 6.6743 × 10<sup>−11</sup> m³ kg<sup>−1</sup> s<sup>−2</sup>, 1 Mpc = 3.0857 × 10<sup>22</sup> m and
+          M<sub>☉</sub> = 1.989 × 10<sup>30</sup> kg. When only H<sub>0</sub> changes, D<sub>Δt</sub> scales exactly as
+          1/H<sub>0</sub>, Σ<sub>cr</sub> as H<sub>0</sub> and the mass as 1/H<sub>0</sub>.
+        </li>
+        <li>
+          The three models differ only in which of w<sub>0</sub> and w<sub>a</sub> may vary. ΛCDM fixes w<sub>0</sub> = −1
+          and w<sub>a</sub> = 0, wCDM frees w<sub>0</sub> and keeps w<sub>a</sub> = 0, and CPL frees both. A slider the
+          model does not let vary is greyed out and tagged "fixed"; each model remembers its own w<sub>0</sub> and
+          w<sub>a</sub> when you switch away and back, while Ω<sub>m</sub> and H<sub>0</sub> are shared.
+        </li>
+        <li>
+          The deceleration parameter is q = ½[1 + 3w(z)Ω<sub>DE</sub>(z)]; acceleration began where q first turns negative
+          going forward in time. Some choices of w<sub>0</sub> and w<sub>a</sub> give no such redshift (always decelerating,
+          or accelerating since before z = 20) or more than one.
+        </li>
+        <li>
+          Distances are integrated numerically (Gauss–Legendre quadrature, relative error below 10<sup>−9</sup>), in <code>src/lib/cpl.ts</code>.
+        </li>
+      </ul>
+
+      <h2>The published fits</h2>
+      <p>
+        The marks under the sliders and the Planck 2018 and DESI DR2 buttons use these values, for the model selected. All
+        are marginalised posterior means with 68 per cent intervals, as the papers state them; values in brackets are fixed
+        by the model.
+      </p>
+      <div class="de-table">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Model</th>
+              <th scope="col">Data</th>
+              <th scope="col">Ω<sub>m</sub></th>
+              <th scope="col">H<sub>0</sub> (km/s/Mpc)</th>
+              <th scope="col">w<sub>0</sub></th>
+              <th scope="col">w<sub>a</sub></th>
+              <th scope="col">Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">ΛCDM</th>
+              <td>Planck TT,TE,EE + lowE + lensing</td>
+              <td>0.3153 ± 0.0073</td>
+              <td>67.36 ± 0.54</td>
+              <td>(−1)</td>
+              <td>(0)</td>
+              <td>Planck VI, Table 2</td>
+            </tr>
+            <tr>
+              <th scope="row">ΛCDM</th>
+              <td>DESI DR2 BAO + CMB</td>
+              <td>0.3027 ± 0.0036</td>
+              <td>68.17 ± 0.28</td>
+              <td>(−1)</td>
+              <td>(0)</td>
+              <td>DESI DR2, Table 5</td>
+            </tr>
+            <tr>
+              <th scope="row">wCDM</th>
+              <td>Planck TT,TE,EE + lowE + lensing + SNe + BAO</td>
+              <td>not given</td>
+              <td>not given</td>
+              <td>−1.028 ± 0.031</td>
+              <td>(0)</td>
+              <td>Planck VI, Eq. 50</td>
+            </tr>
+            <tr>
+              <th scope="row">wCDM</th>
+              <td>DESI DR2 BAO + CMB + DESY5</td>
+              <td>0.3098 ± 0.0050</td>
+              <td>67.34 ± 0.54</td>
+              <td>−0.971 ± 0.021</td>
+              <td>(0)</td>
+              <td>DESI DR2, Table 5</td>
+            </tr>
+            <tr>
+              <th scope="row">CPL</th>
+              <td>Planck TT,TE,EE + lowE + lensing + SNe + BAO</td>
+              <td>not given</td>
+              <td>68.31 ± 0.82</td>
+              <td>−0.957 ± 0.080</td>
+              <td>−0.29 (+0.32, −0.26)</td>
+              <td>Planck VI, Table 6</td>
+            </tr>
+            <tr>
+              <th scope="row">CPL</th>
+              <td>DESI DR2 BAO + CMB + DESY5</td>
+              <td>0.3191 ± 0.0056</td>
+              <td>66.74 ± 0.56</td>
+              <td>−0.752 ± 0.057</td>
+              <td>−0.86 (+0.23, −0.20)</td>
+              <td>DESI DR2, Table 5</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <ul>
+        <li>
+          Planck's SNe are the Pantheon sample and its BAO are 6dFGS, SDSS MGS and BOSS DR12. Planck alone constrains w
+          poorly, so its extended-model results combine it with these. The paper does not tabulate Ω<sub>m</sub> for those
+          fits, nor H<sub>0</sub> for the constant-w one, so those sliders have no Planck mark in those models and the Planck
+          button leaves them as they are.
+        </li>
+        <li>
+          DESI's CMB is Planck temperature and polarisation (PR4 CamSpec at ℓ ≥ 30, with Commander and SimAll at low ℓ)
+          plus the combined Planck and ACT DR6 lensing, and DESY5 is the
+          DES 5-year supernova sample. Its ΛCDM results do not include supernovae, so the ΛCDM entry is DESI + CMB; DESI BAO
+          alone gives Ω<sub>m</sub> = 0.2975 ± 0.0086 and hr<sub>d</sub> = 101.54 ± 0.73 Mpc, which does not fix
+          H<sub>0</sub> without the sound horizon r<sub>d</sub>. Combining DESI + CMB with Pantheon+ or Union3 supernovae instead of DESY5
+          gives (w<sub>0</sub>, w<sub>a</sub>) = (−0.838, −0.62) or (−0.667, −1.09) in CPL, and w = −0.995 or −0.997 in wCDM.
+        </li>
+        <li>
+          These are the means of each parameter's marginal posterior, not the best-fitting point of the fit; with
+          correlated parameters the two can differ.
+        </li>
+      </ul>
+
+      <h2>References</h2>
+      <ul>
+        <li>Chevallier, M. &amp; Polarski, D. 2001, Int. J. Mod. Phys. D, 10, 213</li>
+        <li>Linder, E. V. 2003, Phys. Rev. Lett., 90, 091301</li>
+        <li>Refsdal, S. 1964, MNRAS, 128, 307</li>
+        <li>Planck Collaboration VI 2020, Planck 2018 results. VI. Cosmological parameters, A&amp;A, 641, A6, arXiv:1807.06209</li>
+        <li>DESI Collaboration 2025, DESI DR2 Results II: Measurements of Baryon Acoustic Oscillations and Cosmological Constraints, arXiv:2503.14738</li>
+      </ul>
+    </div>
+  </div>
+</Base>
+
+<script>
+  import { Plot, SERIES } from '../../lib/plot';
+  import { MSUN_PER_KPC2_IN_G_PER_CM2, Universe, withLambda, type CPLParams } from '../../lib/cpl';
+  import { setFrozen, setMarks, type Mark } from '../../lib/controls';
+  import { Z_LENS } from '../../lib/lens/model';
+
+  interface State extends CPLParams {
+    z1: number;
+    z2: number;
+  }
+  type Key = keyof State;
+  type Cosmo = keyof CPLParams;
+  type ModelId = 'lcdm' | 'wcdm' | 'cpl';
+  type Survey = 'planck' | 'desi';
+
+  // --- the models -------------------------------------------------------------------
+  interface Model {
+    name: string;
+    /** The value and the reason for each parameter the model fixes. */
+    fixed: Partial<Record<'w0' | 'wa', [number, string]>>;
+    /** HTML: a fixed string of this file. */
+    note: string;
+  }
+  const MODELS: Record<ModelId, Model> = {
+    lcdm: {
+      name: 'ΛCDM',
+      fixed: { w0: [-1, 'Fixed at −1 in ΛCDM'], wa: [0, 'Fixed at 0 in ΛCDM'] },
+      note: 'ΛCDM: w = −1 at all times. The model is the dashed reference itself, so Δμ and Ξ stay at zero; Ω<sub>m</sub> and H<sub>0</sub> still change the age, q<sub>0</sub>, the onset of acceleration and the absolute-scale charts.',
+    },
+    wcdm: {
+      name: 'wCDM',
+      fixed: { wa: [0, 'Fixed at 0: w does not evolve in wCDM'] },
+      note: 'wCDM: a constant w = w<sub>0</sub> at all times.',
+    },
+    cpl: { name: 'CPL', fixed: {}, note: 'CPL (w<sub>0</sub>w<sub>a</sub>CDM): w(a) = w<sub>0</sub> + w<sub>a</sub>(1 − a), so w changes with time.' },
+  };
+
+  // --- the published fits (marginalised posterior means and 68% intervals) ------------
+  interface Fit {
+    data: string;
+    source: string;
+    /** Value and its uncertainty as printed in the paper. */
+    values: Partial<Record<Cosmo, [number, string]>>;
+    /** Parameters the model frees that the paper does not give for this fit. */
+    missing?: string;
+  }
+  const PLANCK = 'Planck Collaboration VI 2020 (arXiv:1807.06209)';
+  const DESI = 'DESI Collaboration 2025 (arXiv:2503.14738)';
+  const FITS: Record<ModelId, Record<Survey, Fit | null>> = {
+    lcdm: {
+      planck: {
+        data: 'Planck TT,TE,EE+lowE+lensing',
+        source: `${PLANCK}, Table 2`,
+        values: { omegaM: [0.3153, '± 0.0073'], h0: [67.36, '± 0.54'] },
+      },
+      desi: {
+        data: 'DESI BAO + CMB',
+        source: `${DESI}, Table 5`,
+        values: { omegaM: [0.3027, '± 0.0036'], h0: [68.17, '± 0.28'] },
+      },
+    },
+    wcdm: {
+      planck: {
+        data: 'Planck TT,TE,EE+lowE+lensing + SNe + BAO',
+        source: `${PLANCK}, Eq. 50`,
+        values: { w0: [-1.028, '± 0.031'] },
+        missing: 'The paper gives no Ωm or H0 for this fit, so those are left as they are.',
+      },
+      desi: {
+        data: 'DESI BAO + CMB + DESY5',
+        source: `${DESI}, Table 5`,
+        values: { omegaM: [0.3098, '± 0.0050'], h0: [67.34, '± 0.54'], w0: [-0.971, '± 0.021'] },
+      },
+    },
+    cpl: {
+      planck: {
+        data: 'Planck TT,TE,EE+lowE+lensing + SNe + BAO',
+        source: `${PLANCK}, Table 6`,
+        values: { h0: [68.31, '± 0.82'], w0: [-0.957, '± 0.080'], wa: [-0.29, '+0.32 −0.26'] },
+        missing: 'The paper gives no Ωm for this fit, so it is left as it is.',
+      },
+      desi: {
+        data: 'DESI BAO + CMB + DESY5',
+        source: `${DESI}, Table 5`,
+        values: { omegaM: [0.3191, '± 0.0056'], h0: [66.74, '± 0.56'], w0: [-0.752, '± 0.057'], wa: [-0.86, '+0.23 −0.20'] },
+      },
+    },
+  };
+  /** The values a fit gives, without their uncertainties. */
+  const fitValues = (fit: Fit): Partial<Record<Cosmo, number>> =>
+    Object.fromEntries(Object.entries(fit.values).map(([k, [v]]) => [k, v]));
+  const SURVEY_LABEL: Record<Survey, string> = { planck: 'Planck', desi: 'DESI' };
+  const SURVEY_NAME: Record<Survey, string> = { planck: 'Planck 2018', desi: 'DESI DR2' };
+  const SYMBOL: Record<Cosmo, string> = { omegaM: 'Ωm', h0: 'H0', w0: 'w0', wa: 'wa' };
+  const UNIT: Record<Cosmo, string> = { omegaM: '', h0: ' km/s/Mpc', w0: '', wa: '' };
+
+  /** Opens on the DESI DR2 CPL fit, so every slider moves and every chart shows a difference from ΛCDM. */
+  const DEFAULT_MODEL: ModelId = 'cpl';
+  const DEFAULTS: State = { h0: 66.74, omegaM: 0.3191, w0: -0.752, wa: -0.86, z1: 1.2, z2: 3 };
+  /** Where each model's w0 and wa start; afterwards each model remembers its own. */
+  const START_W: Record<ModelId, { w0: number; wa: number }> = {
+    lcdm: { w0: -1, wa: 0 },
+    wcdm: { w0: -0.9, wa: 0 },
+    cpl: { w0: DEFAULTS.w0, wa: DEFAULTS.wa },
+  };
+
+  /** The fixed Einstein radius of the mass readout, 30″, in radians. */
+  const THETA_E = 30 / 206264.806;
+
+  const minus = (s: string) => s.replace(/^-/, '−');
+  const fixed = (v: number, d: number) => minus((Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d));
+  const signed = (v: number, d: number) => (v > 0 ? '+' : '') + fixed(v, d);
+
+  /**
+   * Marks closer than this fraction of the track get their labels on two lines. The labels are about
+   * 35 px ("Planck") and 24 px ("DESI") wide and the track in the 300 px panel about 246 px, so two
+   * labels side by side need their centres 0.14 of the track apart.
+   */
+  const CROWDED = 0.15;
+
+  /** setMarks, then moves every other label of a crowded pair to a second line. */
+  function placeMarks(input: HTMLInputElement, marks: Mark[]) {
+    setMarks(input, marks);
+    const buttons = Array.from(input.closest('.tool-row')?.querySelectorAll<HTMLElement>('.tool-mark') ?? []);
+    const at = (b: HTMLElement) => Number(b.style.getPropertyValue('--at'));
+    buttons.sort((a, b) => at(a) - at(b));
+    for (let i = 1; i < buttons.length; i++) {
+      const prev = buttons[i - 1];
+      if (!prev.classList.contains('de-mark-low') && at(buttons[i]) - at(prev) < CROWDED) buttons[i].classList.add('de-mark-low');
+    }
+  }
+
+  const FORMAT: Record<Key, (v: number) => string> = {
+    omegaM: (v) => v.toFixed(4),
+    h0: (v) => `${v.toFixed(2)} km/s/Mpc`,
+    w0: (v) => fixed(v, 3),
+    wa: (v) => fixed(v, 2),
+    z1: (v) => v.toFixed(2),
+    z2: (v) => v.toFixed(2),
+  };
+
+  // Chart colours, the same on every chart: the chosen model (solid), ΛCDM with the same Ωm and H0
+  // (groups 1 and 2), and the two fixed references of group 3, Planck 2018 ΛCDM and the DESI DR2 fit.
+  const MODEL = { color: SERIES[0], width: 2.2 };
+  const REF = { color: SERIES[1], width: 1.8, dash: [6, 4] };
+  const PLANCK_REF = { color: SERIES[2], width: 1.8, dash: [6, 4] };
+  const DESI_REF = { color: SERIES[3], width: 1.8, dash: [2, 3] };
+  interface LegendEntry {
+    label: string;
+    color: string;
+    dash?: number[];
+  }
+  const LEGEND: LegendEntry[] = [
+    { label: 'This model', color: SERIES[0] },
+    { label: 'ΛCDM, same Ωm and H0', color: SERIES[1], dash: REF.dash },
+  ];
+  /** The group-3 legend; the DESI label names the selected model. */
+  const absoluteLegend = (model: string): LegendEntry[] => [
+    { label: 'This model', color: SERIES[0] },
+    { label: 'Planck 2018 ΛCDM', color: SERIES[2], dash: PLANCK_REF.dash },
+    { label: `DESI DR2 ${model} fit`, color: SERIES[3], dash: DESI_REF.dash },
+  ];
+
+  // --- axis ranges that move in round steps, so they do not jump on every tick ----
+  const pick = (steps: number[], need: number) => steps.find((s) => s >= need) ?? Math.ceil(need);
+  const HALF_RANGES = [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5];
+
+  /** w range: rounded outward to 0.5, always including −1. */
+  function wRange(values: number[]): [number, number] {
+    const lo = Math.min(-1, ...values) - 0.1;
+    const hi = Math.max(-1, ...values) + 0.1;
+    return [Math.floor(lo / 0.5) * 0.5, Math.ceil(hi / 0.5) * 0.5];
+  }
+
+  const LOG_STEPS = [1, 2, 5];
+  const niceDown = (v: number) => {
+    const e = Math.floor(Math.log10(v));
+    const m = v / 10 ** e;
+    return [...LOG_STEPS].reverse().find((s) => s <= m + 1e-9)! * 10 ** e;
+  };
+  const niceUp = (v: number) => {
+    const e = Math.floor(Math.log10(v));
+    const m = v / 10 ** e;
+    return (LOG_STEPS.find((s) => s >= m - 1e-9) ?? 10) * 10 ** e;
+  };
+  /** 1–2–5 ticks on a log axis when it spans little, decades otherwise. */
+  function logTicks(lo: number, hi: number): number[] {
+    const ticks: number[] = [];
+    const decades = Math.log10(hi / lo);
+    for (let e = Math.floor(Math.log10(lo)); e <= Math.ceil(Math.log10(hi)); e++) {
+      for (const s of decades > 2.5 ? [1] : LOG_STEPS) {
+        const t = s * 10 ** e;
+        if (t >= lo * (1 - 1e-9) && t <= hi * (1 + 1e-9)) ticks.push(t);
+      }
+    }
+    return ticks;
+  }
+
+  type Corner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+
+  /**
+   * The legend corner, starting from `preferred`, whose box (the size plot.ts
+   * draws it, plus a few pixels) holds the fewest of the given points, so the
+   * legend hides as little as possible. Ties go to the earlier corner.
+   */
+  function legendCorner(p: Plot, preferred: Corner, points: [number, number][], entries: LegendEntry[] = LEGEND): Corner {
+    const ctx = p.canvas.getContext('2d')!;
+    ctx.font = `500 12px ${p.theme.font}`;
+    const widest = Math.max(...entries.map((e) => ctx.measureText(e.label).width));
+    const w = widest + 44 + 12;
+    const h = 18 * entries.length + 6 + 12;
+    const [x0, x1] = [p.px(p.x.min), p.px(p.x.max)];
+    const [y0, y1] = [p.py(p.y.max), p.py(p.y.min)]; // top and bottom of the plot area
+    const order: Corner[] = [preferred, 'top-right', 'bottom-right', 'top-left', 'bottom-left'];
+    let best = preferred;
+    let fewest = Infinity;
+    for (const c of order) {
+      const left = c.endsWith('left') ? x0 : x1 - w;
+      const top = c.startsWith('top') ? y0 : y1 - h;
+      let covered = 0;
+      for (const [x, y] of points) {
+        const [px, py] = [p.px(x), p.py(y)];
+        if (px >= left - 6 && px <= left + w + 6 && py >= top - 6 && py <= top + h + 6) covered++;
+      }
+      if (covered < fewest) {
+        best = c;
+        fewest = covered;
+      }
+      if (covered === 0) break;
+    }
+    return best;
+  }
+
+  /** Every `step`-th point of each curve (and its last) that lies inside the y range: what a legend should not cover. */
+  function curvePoints(p: Plot, xs: ArrayLike<number>, curves: ArrayLike<number>[], step = 8): [number, number][] {
+    const out: [number, number][] = [];
+    const inside = (y: number) => y >= p.y.min && y <= p.y.max;
+    for (const ys of curves) {
+      for (let i = 0; i < xs.length; i += step) if (inside(ys[i])) out.push([xs[i], ys[i]]);
+      const last = xs.length - 1;
+      if (inside(ys[last])) out.push([xs[last], ys[last]]);
+    }
+    return out;
+  }
+
+  function init(root: HTMLElement) {
+    const panel = root.querySelector<HTMLFormElement>('.tool-panel')!;
+    const status = root.querySelector<HTMLElement>('[data-status]')!;
+    const canvas = (name: string) => root.querySelector<HTMLCanvasElement>(`[data-plot="${name}"]`)!;
+
+    let state: State = { ...DEFAULTS };
+    let model = new Universe(state);
+    let ref = new Universe(withLambda(state));
+    // The fixed references of group 3, from the fits table: Planck 2018 ΛCDM always, and the DESI DR2
+    // fit of the selected model (rebuilt in update() when the model changes).
+    const fitParams = (fit: Fit): CPLParams => ({ h0: NaN, omegaM: NaN, w0: -1, wa: 0, ...fitValues(fit) });
+    const planckLCDM = fitParams(FITS.lcdm.planck!);
+    const planck = new Universe(planckLCDM);
+    let absLegend = absoluteLegend(MODELS[DEFAULT_MODEL].name);
+    let desiFor: ModelId | null = null;
+
+    // Sampled curves, rebuilt in update().
+    const N = 241;
+    const ZMAX = 3;
+    const zs = Float64Array.from({ length: N }, (_, i) => (i * ZMAX) / (N - 1));
+    const XI_N = 300;
+    const zsXi = Float64Array.from({ length: XI_N }, (_, i) => Z_LENS + 0.005 + (i * (6 - Z_LENS - 0.005)) / (XI_N - 1));
+    const curves = {
+      w: new Float64Array(N),
+      wRef: new Float64Array(N).fill(-1),
+      rho: new Float64Array(N),
+      rhoRef: new Float64Array(N).fill(1),
+      dmu: new Float64Array(N),
+      xi: new Float64Array(XI_N),
+      // Group 3: this model, and the DESI fit of the selected model; Planck ΛCDM is fixed.
+      hz: new Float64Array(N),
+      hzDesi: new Float64Array(N),
+      hzPlanck: Float64Array.from(zs, (z) => (planckLCDM.h0 * planck.E(z)) / (1 + z)),
+      muAbs: new Float64Array(N),
+      muAbsDesi: new Float64Array(N),
+      ddt: new Float64Array(XI_N),
+      ddtDesi: new Float64Array(XI_N),
+      sig: new Float64Array(XI_N),
+      sigDesi: new Float64Array(XI_N),
+      ones: new Float64Array(XI_N).fill(1),
+    };
+    // Planck ΛCDM values on the grids, the denominators of the group-3 ratios.
+    const planckMu = Float64Array.from(zs, (z) => planck.distanceModulus(z));
+    const planckDdt = Float64Array.from(zsXi, (z) => planck.timeDelayDistance(Z_LENS, z));
+    const planckSig = Float64Array.from(zsXi, (z) => planck.criticalSurfaceDensity(Z_LENS, z));
+    /** μ − μ_Planck on the grid; at z = 0 its limit, 5 log10(H0,Planck / H0). */
+    const muOffset = (u: Universe, out: Float64Array) => {
+      for (let i = 0; i < N; i++) out[i] = i === 0 ? 5 * Math.log10(planckLCDM.h0 / u.params.h0) : u.distanceModulus(zs[i]) - planckMu[i];
+    };
+    /** H(z)/(1 + z) = H0 E(z)/(1 + z), km/s/Mpc, and the two lensing ratios to Planck ΛCDM. */
+    const absolute = (u: Universe, hz: Float64Array, ddt: Float64Array, sig: Float64Array) => {
+      for (let i = 0; i < N; i++) hz[i] = (u.params.h0 * u.E(zs[i])) / (1 + zs[i]);
+      for (let i = 0; i < XI_N; i++) {
+        ddt[i] = u.timeDelayDistance(Z_LENS, zsXi[i]) / planckDdt[i];
+        sig[i] = u.criticalSurfaceDensity(Z_LENS, zsXi[i]) / planckSig[i];
+      }
+    };
+
+    const plots = {
+      w: new Plot(canvas('w'), { x: { min: 0, max: ZMAX, label: 'Redshift z' }, y: { min: -1.5, max: -0.5, label: 'w(z)' } }),
+      rho: new Plot(canvas('rho'), {
+        x: { min: 0, max: ZMAX, label: 'Redshift z' },
+        y: { min: 0.5, max: 2, log: true, label: 'ρ(z) / ρ(0)' },
+      }),
+      dmu: new Plot(canvas('dmu'), { x: { min: 0, max: ZMAX, label: 'Redshift z' }, y: { min: -0.05, max: 0.05, label: 'Δμ (mag)' } }),
+      xi: new Plot(canvas('xi'), {
+        x: { min: 0, max: 6, label: 'Source redshift' },
+        y: { min: 0.99, max: 1.01, label: 'Ξ / Ξ(ΛCDM)' },
+        margin: { left: 66 }, // room for tick labels such as 0.998
+      }),
+      hz: new Plot(canvas('hz'), { x: { min: 0, max: ZMAX, label: 'Redshift z' }, y: { min: 50, max: 80, label: 'H(z)/(1 + z) (km/s/Mpc)' } }),
+      muAbs: new Plot(canvas('muAbs'), { x: { min: 0, max: ZMAX, label: 'Redshift z' }, y: { min: -0.2, max: 0.2, label: 'μ − μ(Planck ΛCDM) (mag)' }, margin: { left: 66 } }),
+      ddt: new Plot(canvas('ddt'), {
+        x: { min: 0, max: 6, label: 'Source redshift' },
+        y: { min: 0.9, max: 1.1, label: 'Ratio to Planck ΛCDM' },
+        margin: { left: 66 },
+      }),
+      sig: new Plot(canvas('sig'), {
+        x: { min: 0, max: 6, label: 'Source redshift' },
+        y: { min: 0.9, max: 1.1, label: 'Ratio to Planck ΛCDM' },
+        margin: { left: 66 },
+      }),
+    };
+
+    // --- numbers ---------------------------------------------------------------------
+    const num = (key: string, text: string) => {
+      const el = root.querySelector(`[data-num="${key}"]`);
+      if (el && el.textContent !== text) el.textContent = text;
+    };
+
+    function accelerationText(): string {
+      const q0 = model.q(0);
+      const transitions = model.accelerationTransitions(20);
+      if (!(q0 < 0)) {
+        // Decelerating now; transitions[0] is where an earlier accelerating phase ended, if there was one.
+        const [end, start] = transitions;
+        if (!end) return 'never (to z = 20)';
+        return start
+          ? `not today (from z = ${start.z.toFixed(2)} to ${end.z.toFixed(2)})`
+          : `not today (only at z > ${end.z.toFixed(2)})`;
+      }
+      const onset = transitions.find((t) => t.begins);
+      if (!onset) return 'before z = 20';
+      const more = transitions.length - 1;
+      return `z = ${onset.z.toFixed(2)}` + (more > 0 ? ` (q changes sign ${transitions.length} times)` : '');
+    }
+
+    const family = (u: Universe) => u.lensingRatio(Z_LENS, state.z1) / u.lensingRatio(Z_LENS, state.z2);
+
+    /** x.xxx × 10ⁿ, for masses and surface densities. */
+    const SUP = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+    const sci = (v: number, d = 3) => {
+      const e = Math.floor(Math.log10(Math.abs(v)));
+      return `${(v / 10 ** e).toFixed(d)} × 10${String(e).replace(/\d/g, (c) => SUP[Number(c)])}`;
+    };
+
+    function updateNumbers() {
+      if (!model.ok) {
+        for (const k of ['age', 'q0', 'zacc', 'wNow', 'w1', 'dmu1', 'family', 'shift', 'ddt1', 'ddtRatio', 'delay', 'sig1', 'mass', 'massShift']) num(k, '–');
+        return;
+      }
+      // Group 3, for the source at z1.
+      const ddt = model.timeDelayDistance(Z_LENS, state.z1);
+      const ddtRatio = ddt / planck.timeDelayDistance(Z_LENS, state.z1);
+      num('ddt1', `${ddt.toFixed(0)} Mpc`);
+      num('ddtRatio', ddtRatio.toFixed(4));
+      num('delay', `${(100 * ddtRatio).toFixed(1)} days`);
+      const sig = model.criticalSurfaceDensity(Z_LENS, state.z1);
+      num('sig1', `${sci(sig)} M☉/kpc² (${(sig * MSUN_PER_KPC2_IN_G_PER_CM2).toFixed(3)} g/cm²)`);
+      const mass = (u: Universe) => Math.PI * (THETA_E * u.angular(Z_LENS) * 1000) ** 2 * u.criticalSurfaceDensity(Z_LENS, state.z1);
+      const m = mass(model);
+      num('mass', `${sci(m)} M☉`);
+      num('massShift', `${signed(100 * (m / mass(planck) - 1), 2)} %`);
+
+      num('age', `${model.age().toFixed(2)} Gyr`);
+      num('q0', fixed(model.q(0), 3));
+      num('zacc', accelerationText());
+      num('wNow', fixed(model.w(0), 3));
+      num('w1', fixed(model.w(1), 3));
+      num('dmu1', `${signed(model.distanceModulus(1) - ref.distanceModulus(1), 3)} mag`);
+      const f = family(model);
+      const f0 = family(ref);
+      num('family', Number.isFinite(f) ? f.toFixed(4) : '–');
+      num('shift', Number.isFinite(f / f0) ? `${signed(100 * (f / f0 - 1), 2)} %` : '–');
+    }
+
+    // --- update and draw -------------------------------------------------------------
+    let queued = false;
+    function invalidate() {
+      if (!queued) {
+        queued = true;
+        requestAnimationFrame(update);
+      }
+    }
+
+    function update() {
+      queued = false;
+      model = new Universe(state);
+      ref = new Universe(withLambda(state));
+      status.hidden = model.ok;
+      if (!model.ok) status.textContent = 'These parameters make H(z)² negative at some redshift, so there is no such universe.';
+      if (model.ok) {
+        for (let i = 0; i < N; i++) {
+          const z = zs[i];
+          curves.w[i] = model.w(z);
+          curves.rho[i] = model.darkEnergyRatio(z);
+          curves.dmu[i] = i === 0 ? 0 : model.distanceModulus(z) - ref.distanceModulus(z);
+        }
+        for (let i = 0; i < XI_N; i++) curves.xi[i] = model.lensingRatio(Z_LENS, zsXi[i]) / ref.lensingRatio(Z_LENS, zsXi[i]);
+        absolute(model, curves.hz, curves.ddt, curves.sig);
+        muOffset(model, curves.muAbs);
+      }
+      if (desiFor !== modelId) {
+        // The DESI curves change only with the selected model.
+        desiFor = modelId;
+        const desi = new Universe(fitParams(FITS[modelId].desi!));
+        absolute(desi, curves.hzDesi, curves.ddtDesi, curves.sigDesi);
+        muOffset(desi, curves.muAbsDesi);
+        absLegend = absoluteLegend(MODELS[modelId].name);
+      }
+      if (model.ok) setRanges();
+      updateNumbers();
+      for (const p of Object.values(plots)) p.redraw();
+    }
+
+    function setRanges() {
+      const [wlo, whi] = wRange(Array.from(curves.w));
+      plots.w.y = { ...plots.w.y, min: wlo, max: whi };
+
+      let lo = 1;
+      let hi = 1;
+      for (const v of curves.rho) {
+        lo = Math.min(lo, v);
+        hi = Math.max(hi, v);
+      }
+      const rlo = Math.min(0.5, niceDown(lo / 1.15));
+      const rhi = Math.max(2, niceUp(hi * 1.15));
+      plots.rho.y = { ...plots.rho.y, min: rlo, max: rhi, ticks: logTicks(rlo, rhi) };
+
+      let dm = 0;
+      for (const v of curves.dmu) dm = Math.max(dm, Math.abs(v));
+      const L = pick(HALF_RANGES.slice(2), dm * 1.15);
+      plots.dmu.y = { ...plots.dmu.y, min: -L, max: L };
+
+      let dx = 0;
+      for (const v of curves.xi) if (Number.isFinite(v)) dx = Math.max(dx, Math.abs(v - 1));
+      const X = pick(HALF_RANGES, dx * 1.15);
+      plots.xi.y = { ...plots.xi.y, min: Math.max(0, 1 - X), max: 1 + X };
+
+      // Group 3: every curve on the chart fits, in steps of 10 km/s/Mpc or from the 1–2–5 half-ranges.
+      let hlo = Infinity;
+      let hhi = -Infinity;
+      for (const ys of [curves.hz, curves.hzDesi, curves.hzPlanck]) {
+        for (const v of ys) {
+          hlo = Math.min(hlo, v);
+          hhi = Math.max(hhi, v);
+        }
+      }
+      plots.hz.y = { ...plots.hz.y, min: Math.floor((hlo - 2) / 10) * 10, max: Math.ceil((hhi + 2) / 10) * 10 };
+      const half = (arrays: Float64Array[], centre: number, steps: number[]) => {
+        let d = 0;
+        for (const ys of arrays) for (const v of ys) if (Number.isFinite(v)) d = Math.max(d, Math.abs(v - centre));
+        return pick(steps, d * 1.15);
+      };
+      const M = half([curves.muAbs, curves.muAbsDesi], 0, HALF_RANGES.slice(2));
+      plots.muAbs.y = { ...plots.muAbs.y, min: -M, max: M };
+      for (const [p, arrays] of [
+        [plots.ddt, [curves.ddt, curves.ddtDesi]],
+        [plots.sig, [curves.sig, curves.sigDesi]],
+      ] as const) {
+        const R = half([...arrays], 1, HALF_RANGES);
+        p.y = { ...p.y, min: Math.max(0, 1 - R), max: 1 + R };
+      }
+    }
+
+    plots.w.observe(() => {
+      const p = plots.w;
+      p.begin();
+      if (!model.ok) return;
+      p.rule('y', -1, { color: p.theme.muted, width: 1 });
+      p.text(ZMAX, -1, 'phantom divide, w = −1', { align: 'right', dx: -6, dy: 9, color: p.theme.muted });
+      p.line(zs, curves.wRef, REF);
+      p.line(zs, curves.w, MODEL);
+      p.legend(LEGEND, curves.w[N - 1] > -1 ? 'bottom-right' : 'top-right');
+    });
+    plots.rho.observe(() => {
+      const p = plots.rho;
+      p.begin();
+      if (!model.ok) return;
+      p.line(zs, curves.rhoRef, REF);
+      p.line(zs, curves.rho, MODEL);
+      p.legend(LEGEND, curves.rho[N - 1] > 1 ? 'bottom-right' : 'top-right');
+    });
+    plots.dmu.observe(() => {
+      const p = plots.dmu;
+      p.begin();
+      if (!model.ok) return;
+      p.line([0, ZMAX], [0, 0], REF);
+      p.line(zs, curves.dmu, MODEL);
+      p.legend(LEGEND, curves.dmu[N - 1] > 0 ? 'bottom-right' : 'top-right');
+    });
+    // --- group 3: absolute scales against the fixed Planck ΛCDM and DESI references ----
+    plots.hz.observe(() => {
+      const p = plots.hz;
+      p.begin();
+      if (!model.ok) return;
+      p.line(zs, curves.hz, MODEL);
+      p.line(zs, curves.hzPlanck, PLANCK_REF);
+      p.line(zs, curves.hzDesi, DESI_REF);
+      // The minimum of ȧ, where acceleration begins (none inside the range if it is at an end).
+      let k = 0;
+      for (let i = 1; i < N; i++) if (curves.hz[i] < curves.hz[k]) k = i;
+      const marks: [number, number][] = [];
+      if (k > 0 && k < N - 1) {
+        p.points([zs[k]], [curves.hz[k]], { color: SERIES[0], radius: 4 });
+        p.text(zs[k], curves.hz[k], 'ä = 0', { align: 'center', dy: 14, color: p.theme.muted });
+        marks.push([zs[k], curves.hz[k]]);
+      }
+      const points = [...marks, ...curvePoints(p, zs, [curves.hz, curves.hzPlanck, curves.hzDesi])];
+      p.legend(absLegend, legendCorner(p, 'top-left', points, absLegend));
+    });
+    plots.muAbs.observe(() => {
+      const p = plots.muAbs;
+      p.begin();
+      if (!model.ok) return;
+      p.line(zs, curves.muAbs, MODEL);
+      p.line([0, ZMAX], [0, 0], PLANCK_REF);
+      p.line(zs, curves.muAbsDesi, DESI_REF);
+      const points = curvePoints(p, zs, [curves.muAbs, curves.muAbsDesi, new Float64Array(N)]);
+      p.legend(absLegend, legendCorner(p, 'top-right', points, absLegend));
+    });
+    /** A ratio-to-Planck chart against source redshift, with the lens and the z1 and z2 sources marked. */
+    function drawRatio(p: Plot, mine: Float64Array, desiCurve: Float64Array, at: (u: Universe, z: number) => number) {
+      p.begin();
+      if (!model.ok) return;
+      p.rule('x', Z_LENS, { color: p.theme.muted, width: 1 });
+      p.text(Z_LENS, p.y.max, 'lens', { dx: 5, dy: 10, color: p.theme.muted });
+      p.line(zsXi, mine, MODEL);
+      p.line([Z_LENS, 6], [1, 1], PLANCK_REF);
+      p.line(zsXi, desiCurve, DESI_REF);
+      // The lens line's top and the end of its label.
+      const marks: [number, number][] = [[Z_LENS, p.y.max], p.toData(p.px(Z_LENS) + 32, p.py(p.y.max) + 10)];
+      ([['z₁', state.z1], ['z₂', state.z2]] as const).forEach(([label, z]) => {
+        const r = at(model, z) / at(planck, z);
+        marks.push([z, r], [z, p.y.min]);
+        p.rule('x', z, { color: SERIES[0], width: 1, dash: [2, 3], alpha: 0.7 });
+        p.points([z], [r], { color: SERIES[0], radius: 4 });
+        p.text(z, p.y.min, label, { dx: 5, dy: -10, bold: true });
+      });
+      const points = [...marks, ...curvePoints(p, zsXi, [mine, desiCurve, curves.ones])];
+      p.legend(absLegend, legendCorner(p, mine[XI_N - 1] > 1 ? 'bottom-right' : 'top-right', points, absLegend));
+    }
+    plots.ddt.observe(() => drawRatio(plots.ddt, curves.ddt, curves.ddtDesi, (u, z) => u.timeDelayDistance(Z_LENS, z)));
+    plots.sig.observe(() => drawRatio(plots.sig, curves.sig, curves.sigDesi, (u, z) => u.criticalSurfaceDensity(Z_LENS, z)));
+
+    plots.xi.observe(() => {
+      const p = plots.xi;
+      p.begin();
+      if (!model.ok) return;
+      p.rule('x', Z_LENS, { color: p.theme.muted, width: 1 });
+      p.text(Z_LENS, p.y.max, 'lens', { dx: 5, dy: 10, color: p.theme.muted });
+      p.line([Z_LENS, 6], [1, 1], REF);
+      p.line(zsXi, curves.xi, MODEL);
+      // Marker and label positions (data coordinates) the legend must not cover.
+      // The lens line's top and the end of its label.
+      const marks: [number, number][] = [[Z_LENS, p.y.max], p.toData(p.px(Z_LENS) + 32, p.py(p.y.max) + 10)];
+      ([['z₁', state.z1], ['z₂', state.z2]] as const).forEach(([label, z]) => {
+        const r = model.lensingRatio(Z_LENS, z) / ref.lensingRatio(Z_LENS, z);
+        marks.push([z, r], [z, p.y.min]);
+        p.rule('x', z, { color: SERIES[0], width: 1, dash: [2, 3], alpha: 0.7 });
+        p.points([z], [r], { color: SERIES[0], radius: 4 });
+        p.text(z, p.y.min, label, { dx: 5, dy: -10, bold: true });
+      });
+      p.legend(LEGEND, legendCorner(p, curves.xi[XI_N - 1] > 1 ? 'bottom-right' : 'top-right', marks));
+    });
+
+    // --- controls --------------------------------------------------------------------
+    const inputs = Array.from(panel.querySelectorAll<HTMLInputElement>('[data-param]'));
+    const slider = (key: Key) => inputs.find((i) => i.dataset.param === key)!;
+    const fitButtons = Array.from(panel.querySelectorAll<HTMLButtonElement>('[data-fit]'));
+    const radios = Array.from(panel.querySelectorAll<HTMLInputElement>('input[name="de-model"]'));
+    const modelNote = panel.querySelector<HTMLElement>('[data-model-note]')!;
+    const fitNote = panel.querySelector<HTMLElement>('[data-fit-note]')!;
+
+    let modelId: ModelId = DEFAULT_MODEL;
+    let remembered = structuredClone(START_W);
+
+    function fitTitle(survey: Survey, fit: Fit | null): string {
+      const name = MODELS[modelId].name;
+      if (!fit) return `${SURVEY_NAME[survey]} has no published ${name} fit`;
+      const list = (Object.entries(fit.values) as [Cosmo, [number, string]][])
+        .map(([k, [v, err]]) => `${SYMBOL[k]} = ${minus(String(v))} ${err}${UNIT[k]}`)
+        .join(', ');
+      return `${SURVEY_NAME[survey]} ${name} fit, ${fit.data}: ${list}. ${fit.source}; marginalised posterior means and 68% intervals.${fit.missing ? ` ${fit.missing}` : ''}`;
+    }
+
+    /** Freezes what the model fixes, draws its marks and labels its fit buttons. */
+    function applyModel() {
+      const m = MODELS[modelId];
+      for (const r of radios) r.checked = r.value === modelId;
+      modelNote.innerHTML = m.note;
+      for (const key of ['w0', 'wa'] as const) {
+        const rule = m.fixed[key];
+        if (rule) state[key] = rule[0];
+        setFrozen(slider(key), Boolean(rule), rule?.[1]);
+      }
+      for (const key of ['omegaM', 'h0', 'w0', 'wa'] as const) {
+        const marks: Mark[] = [];
+        if (!m.fixed[key as 'w0' | 'wa']) {
+          for (const survey of ['planck', 'desi'] as const) {
+            const fit = FITS[modelId][survey];
+            const entry = fit?.values[key];
+            if (!fit || !entry) continue;
+            const [v, err] = entry;
+            marks.push({
+              value: v,
+              label: SURVEY_LABEL[survey],
+              title: `${SURVEY_NAME[survey]} ${m.name} fit, ${fit.data}: ${SYMBOL[key]} = ${minus(String(v))} ${err}${UNIT[key]}. ${fit.source}; posterior mean and 68% interval.`,
+            });
+          }
+        }
+        placeMarks(slider(key), marks);
+      }
+      for (const b of fitButtons) {
+        const survey = b.dataset.fit as Survey;
+        const fit = FITS[modelId][survey];
+        b.disabled = !fit;
+        b.title = fitTitle(survey, fit);
+      }
+      updateFitNote();
+    }
+
+    function setModel(next: ModelId) {
+      remembered[modelId] = { w0: state.w0, wa: state.wa };
+      modelId = next;
+      state.w0 = remembered[next].w0;
+      state.wa = remembered[next].wa;
+      applyModel();
+      sync();
+      invalidate();
+    }
+
+    function sync() {
+      for (const input of inputs) {
+        const key = input.dataset.param as Key;
+        input.value = String(state[key]);
+        panel.querySelector(`[data-out="${key}"]`)!.textContent = FORMAT[key](state[key]);
+      }
+      // A button shows as pressed only when it sets every slider the model frees and all of them match,
+      // so a partial fit (one that leaves some parameters as they were) never looks like a published one.
+      for (const b of fitButtons) {
+        const fit = FITS[modelId][b.dataset.fit as Survey];
+        const values = fit ? fitValues(fit) : null;
+        const match =
+          values !== null && leftAsTheyAre(values).length === 0 && (Object.keys(values) as Cosmo[]).every((k) => Math.abs(state[k] - values[k]!) < 1e-9);
+        b.setAttribute('aria-pressed', String(match));
+      }
+    }
+
+    /** The parameters the model frees that a fit does not set. */
+    function leftAsTheyAre(values: Partial<Record<Cosmo, number>>): Cosmo[] {
+      const fixedHere = MODELS[modelId].fixed;
+      return (['omegaM', 'h0', 'w0', 'wa'] as const).filter((k) => !(k in values) && !(k === 'w0' || k === 'wa' ? fixedHere[k] : false));
+    }
+
+    /** A visible line for a partial fit of the selected model: which parameters its button leaves as they are. */
+    function updateFitNote() {
+      const lines: string[] = [];
+      for (const survey of ['planck', 'desi'] as const) {
+        const fit = FITS[modelId][survey];
+        if (!fit) continue;
+        const left = leftAsTheyAre(fitValues(fit));
+        if (!left.length) continue;
+        const sets = (Object.keys(fit.values) as Cosmo[]).map((k) => SYMBOL[k]);
+        const names = left.map((k) => SYMBOL[k]);
+        const list = (items: string[], last: string) => (items.length > 1 ? `${items.slice(0, -1).join(', ')} ${last} ${items.at(-1)}` : items[0]);
+        lines.push(
+          `${SURVEY_NAME[survey]} gives no ${list(names, 'or')} for its ${MODELS[modelId].name} fit: its button sets ${list(sets, 'and')} and leaves ${list(names, 'and')} as ${names.length > 1 ? 'they are' : 'it is'}, so the result mixes the fit with your settings.`,
+        );
+      }
+      fitNote.textContent = lines.join(' ');
+      fitNote.hidden = !lines.length;
+    }
+
+    panel.addEventListener('input', (ev) => {
+      const input = ev.target as HTMLInputElement;
+      const key = input.dataset.param as Key | undefined;
+      if (!key) return;
+      state[key] = Number(input.value);
+      sync();
+      invalidate();
+    });
+    for (const r of radios) r.addEventListener('change', () => r.checked && setModel(r.value as ModelId));
+    for (const b of fitButtons) {
+      b.addEventListener('click', () => {
+        const fit = FITS[modelId][b.dataset.fit as Survey];
+        if (!fit) return;
+        state = { ...state, ...fitValues(fit) };
+        sync();
+        invalidate();
+      });
+    }
+    panel.querySelector('[data-reset]')!.addEventListener('click', () => {
+      state = { ...DEFAULTS };
+      remembered = structuredClone(START_W);
+      modelId = DEFAULT_MODEL;
+      applyModel();
+      sync();
+      invalidate();
+    });
+
+    applyModel();
+    sync();
+    update();
+  }
+
+  document.querySelectorAll<HTMLElement>('[data-de]').forEach(init);
+</script>
+
+<style>
+  .de-figures {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  }
+  /* A heading over each group of charts, in the style of the panel's legends. */
+  .de-group {
+    grid-column: 1 / -1;
+    display: grid;
+    gap: 4px;
+    margin-top: 6px;
+    font-family: var(--font-ui);
+  }
+  .de-group:first-child {
+    margin-top: 0;
+  }
+  .de-group h2 {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--amber);
+  }
+  .de-group p {
+    margin: 0;
+    max-width: var(--measure);
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--ink-soft);
+  }
+  .de-figures .tool-figure canvas {
+    height: 260px;
+  }
+  .de-figure-note {
+    margin: 6px 0 0;
+    font-family: var(--font-ui);
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--muted);
+  }
+  .de-readout {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+    color: var(--ink-soft);
+  }
+  .de-fixed {
+    margin: 0;
+  }
+  .de-hint {
+    color: var(--muted);
+  }
+  .de-status {
+    margin: 0;
+    color: var(--amber);
+  }
+  /* Two published values close together on one slider: the second label drops to a second line (its tick stays short, so it does not cross the first label). */
+  :global(.tool-marks:has(.de-mark-low)) {
+    height: 40px;
+  }
+  :global(.tool-mark.de-mark-low) {
+    padding-top: 21px;
+  }
+  .de-table {
+    overflow-x: auto;
+  }
+  .de-table table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+  .de-table th,
+  .de-table td {
+    padding: 6px 10px 6px 0;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: top;
+  }
+  .de-table thead th {
+    color: var(--ink);
+    border-bottom-color: var(--line-strong);
+  }
+  .de-table td:nth-child(n + 3):nth-child(-n + 6) {
+    white-space: nowrap;
+  }
+  .de-status[hidden] {
+    display: none;
+  }
+  .tool-notes ul {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding-left: 1.2em;
+  }
+  @media (max-width: 520px) {
+    .tool-figure canvas,
+    .de-figures .tool-figure canvas {
+      height: 250px;
+    }
+  }
+</style>
