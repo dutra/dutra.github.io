@@ -1,0 +1,1051 @@
+---
+// A toy Hubble diagram from AGN variability. If how an AGN flickers depends on
+// how luminous it is, the flicker gives its luminosity, and its observed
+// brightness then gives its distance. This page simulates that with damped
+// random walk light curves, fits σ and τ to each one by maximum likelihood,
+// and turns them into distances through two toy relations.
+//
+//  - src/lib/agn.ts         light curves, the toy relations, the fit and the distances
+//  - src/lib/agn-worker.ts  runs the fits in a Web Worker
+//  - src/lib/cpl.ts         the cosmology that generates the data
+//  - src/lib/plot.ts        the canvas charts
+//
+// Controls are bound by their data-param attributes. Survey controls start a
+// new fit job (debounced; a newer job cancels an older one) whose results
+// arrive in slices and fill the charts in. The cosmology controls never refit:
+// the AGN and their fits do not depend on it, only the distances do (agn.ts,
+// measure()), so one rAF-coalesced update redraws. The same holds for the three
+// selectors (generating model, distance indicator, fitted model): they change
+// which distances are drawn and compared, never the fits.
+import { getEntry } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import '../../styles/tools.css';
+
+const paper = await getEntry('publications', 'evolving-dark-energy-new-cosmic-probe');
+if (!paper?.data.arxiv) throw new Error('agn-hubble: the publication entry or its arXiv id is missing');
+const arxiv = paper.data.arxiv;
+---
+
+<Base
+  title="AGN variability as a distance probe"
+  description="A simulation of how the flickering of active galactic nuclei could measure cosmic distances: damped random walk light curves, maximum-likelihood fits of their amplitude and timescale, toy luminosity relations and the Hubble diagram they give."
+>
+  <div class="tool" data-agn>
+    <div class="tool-head">
+      <a class="tool-back" href="/projects/">Projects</a>
+      <h1>AGN variability as a distance probe</h1>
+      <p class="intro">
+        A simulation that teaches the idea: if how an active galactic nucleus flickers depends on how luminous it is, then
+        measuring the flicker gives the luminosity, and comparing it with the observed brightness gives the distance. Each
+        light curve is fitted for its amplitude σ and timescale τ. The relations between those and luminosity are toys.
+      </p>
+    </div>
+
+    <div class="tool-body">
+      <form class="tool-panel" aria-label="Simulation controls" onsubmit="return false">
+        <fieldset>
+          <legend>Survey</legend>
+          <label class="tool-row">
+            <span><span>Number of AGN</span> <output data-out="count"></output></span>
+            <input type="range" data-param="count" min="20" max="400" step="10" />
+          </label>
+          <label class="tool-row">
+            <span><span>Survey length</span> <output data-out="years"></output></span>
+            <input type="range" data-param="years" min="1" max="20" step="0.5" />
+          </label>
+          <label class="tool-row">
+            <span><span>Cadence</span> <output data-out="cadence"></output></span>
+            <input type="range" data-param="cadence" min="2" max="30" step="1" />
+          </label>
+          <label class="tool-row">
+            <span><span>Photometric error</span> <output data-out="photErr"></output></span>
+            <input type="range" data-param="photErr" min="0" max="0.1" step="0.005" />
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Toy relations</legend>
+          <span class="agn-label" id="agn-indicator-label">Luminosity, and so distance, from</span>
+          <div class="tool-models" role="radiogroup" aria-labelledby="agn-indicator-label">
+            <label title="Only the fitted σ sets each AGN's luminosity; the fitted τ is shown but not used">
+              <input type="radio" name="agn-indicator" value="sigma" /><span>σ only</span>
+            </label>
+            <label title="The fitted σ and τ together set each AGN's luminosity">
+              <input type="radio" name="agn-indicator" value="both" /><span>σ and τ</span>
+            </label>
+          </div>
+          <p class="agn-note" data-sigma-note hidden>
+            The τ relation still shapes the simulated light curves, and so how well σ is fitted, but it is not used to set
+            the luminosity.
+          </p>
+          <label class="tool-row">
+            <span><span>Scatter of the σ relation</span> <output data-out="scatterSigma"></output></span>
+            <input type="range" data-param="scatterSigma" min="0" max="0.3" step="0.01" />
+          </label>
+          <label class="tool-row">
+            <span><span>Scatter of the τ relation</span> <output data-out="scatterTau"></output></span>
+            <input type="range" data-param="scatterTau" min="0" max="0.3" step="0.01" />
+          </label>
+          <label class="tool-row">
+            <span><span>τ slope b<sub>τ</sub> (toy)</span> <output data-out="bTau"></output></span>
+            <input type="range" data-param="bTau" min="-0.2" max="0" step="0.01" />
+          </label>
+          <p class="agn-note">
+            The σ slope is fixed at 0.090 dex/mag. b<sub>τ</sub> = 0 makes τ independent of luminosity, as measured.
+          </p>
+        </fieldset>
+
+        <fieldset>
+          <legend>The universe that generates the data</legend>
+          <div class="tool-models" role="radiogroup" aria-label="Dark energy model of the generating universe">
+            <label title="ΛCDM: a cosmological constant, w = −1 at all times">
+              <input type="radio" name="agn-model" value="lcdm" /><span>ΛCDM</span>
+            </label>
+            <label title="wCDM: a constant equation of state, w = w0 at all times">
+              <input type="radio" name="agn-model" value="wcdm" /><span>wCDM</span>
+            </label>
+            <label title="w0waCDM (CPL): w(a) = w0 + wa(1 − a)">
+              <input type="radio" name="agn-model" value="cpl" /><span>CPL</span>
+            </label>
+          </div>
+          <label class="tool-row">
+            <span><span>Matter density Ω<sub>m</sub></span> <output data-out="omegaM"></output></span>
+            <input type="range" data-param="omegaM" min="0.1" max="0.5" step="0.0001" />
+          </label>
+          <label class="tool-row">
+            <span><span>w<sub>0</sub></span> <output data-out="w0"></output></span>
+            <input type="range" data-param="w0" min="-2" max="0" step="0.001" />
+          </label>
+          <label class="tool-row">
+            <span><span>w<sub>a</sub></span> <output data-out="wa"></output></span>
+            <input type="range" data-param="wa" min="-3" max="2" step="0.01" />
+          </label>
+          <p class="agn-note">
+            H<sub>0</sub> is fixed at 70 km/s/Mpc, so only the Planck 2018 and DESI DR2 values of Ω<sub>m</sub>,
+            w<sub>0</sub> and w<sub>a</sub> are marked, for the model selected. Changing the model or these sliders moves the
+            distances without refitting.
+          </p>
+        </fieldset>
+
+        <fieldset>
+          <legend>Result</legend>
+          <span class="agn-label" id="agn-fit-label">Model fitted to the Hubble diagram</span>
+          <div class="tool-models" role="radiogroup" aria-labelledby="agn-fit-label">
+            <label title="ΛCDM with the generating Ωm: nothing is fitted, only its χ² is reported">
+              <input type="radio" name="agn-fit" value="lcdm" /><span>ΛCDM, no fit</span>
+            </label>
+            <label title="wCDM: a constant w is fitted, with wa = 0 and Ωm at its generating value">
+              <input type="radio" name="agn-fit" value="wcdm" /><span>wCDM, fit w</span>
+            </label>
+          </div>
+          <p class="agn-status" data-status role="status">fitting…</p>
+          <dl class="tool-numbers">
+            <div><dt>Scatter of μ̂ − μ<sub>true</sub> (<span data-indicator>σ and τ</span>)</dt><dd data-num="spread">–</dd></div>
+            <div><dt>Mean bias of μ̂ (<span data-indicator>σ and τ</span>)</dt><dd data-num="bias">–</dd></div>
+            <div><dt>Weighted mean bias (<span data-indicator>σ and τ</span>)</dt><dd data-num="wbias">–</dd></div>
+            <div><dt>Median survey length / τ<sub>obs</sub></dt><dd data-num="baseline">–</dd></div>
+            <div><dt>τ unconstrained</dt><dd data-num="unconstrained">–</dd></div>
+            <div><dt>Distance scatter, σ alone</dt><dd data-num="spreadSigma">–</dd></div>
+            <div><dt>Distance scatter, σ and τ</dt><dd data-num="spreadBoth">–</dd></div>
+            <div><dt>Best constant w (w<sub>a</sub> = 0)</dt><dd data-num="fit">–</dd></div>
+            <div><dt>Its 1σ range</dt><dd data-num="fitRange">–</dd></div>
+            <div><dt>χ² / degrees of freedom</dt><dd data-num="chi2">–</dd></div>
+          </dl>
+          <div class="tool-buttons">
+            <button type="button" class="tool-button" data-action="sample">New sample</button>
+            <button type="button" class="tool-button" data-action="next">Next AGN</button>
+            <button type="button" class="tool-button" data-action="reset">Reset</button>
+          </div>
+        </fieldset>
+      </form>
+
+      <div class="tool-figures agn-figures">
+        <figure class="tool-figure agn-wide">
+          <figcaption>Light curve of one AGN: <span data-caption>–</span></figcaption>
+          <canvas data-plot="lc" role="img" aria-label="Simulated light curve of the selected AGN: magnitude against observed time in days, brighter up."></canvas>
+        </figure>
+        <figure class="tool-figure">
+          <figcaption>Fitted σ against luminosity (brighter AGN to the left)</figcaption>
+          <canvas data-plot="sigma" role="img" aria-label="Fitted long-term rms σ against true absolute magnitude, with the toy relation."></canvas>
+        </figure>
+        <figure class="tool-figure">
+          <figcaption>Fitted rest-frame τ against luminosity (faint points: τ unconstrained)</figcaption>
+          <canvas data-plot="tau" role="img" aria-label="Fitted rest-frame damping time against true absolute magnitude, with the toy relation; unconstrained fits drawn faint."></canvas>
+        </figure>
+        <figure class="tool-figure agn-wide">
+          <figcaption>Hubble diagram (click a point to see its light curve)</figcaption>
+          <canvas class="agn-click" data-plot="hubble" role="img" aria-label="Estimated distance modulus against redshift, with the generating and the ΛCDM curves."></canvas>
+        </figure>
+        <figure class="tool-figure agn-wide">
+          <figcaption>Residuals from ΛCDM with the same Ω<sub>m</sub>: μ̂ − μ<sub>ΛCDM</sub></figcaption>
+          <canvas data-plot="res" role="img" aria-label="Distance modulus residuals from ΛCDM against redshift, with binned means, the generating cosmology and the best constant-w fit."></canvas>
+        </figure>
+      </div>
+    </div>
+
+    <div class="tool-notes">
+      <h2>What this shows</h2>
+      <p>
+        Each simulated AGN has a light curve whose brightness wanders up and down over months to years, as a damped random walk with two parameters: σ, the long-term rms of the light curve in magnitudes, and τ, the damping time over which the wander forgets where it was. Here both are tied to the absolute magnitude M by toy relations. Each light curve is fitted for σ and τ; the two together give an estimate of M, and the difference between the observed mean magnitude m and M is the distance modulus μ, which the Hubble diagram plots against redshift.
+      </p>
+      <p>
+        A light curve only shows the variability it had time to show. A survey a few τ long sees less than the full variance, and cannot tell a longer τ with a larger σ from a shorter τ with a smaller one. Time dilation makes this worse with distance: an AGN at redshift z is seen to vary 1 + z times more slowly, so the observed damping time τ<sub>obs</sub> = (1 + z) τ is longer and the same survey covers fewer of them. Fits of τ are known to be biased and poorly constrained unless the light curve is about ten times longer than τ<sub>obs</sub> (Kozłowski 2017). Shorten the survey and watch the τ chart, the count of unconstrained fits and the residuals at high redshift.
+      </p>
+      <p>
+        What a short light curve does measure well is the variability on short timescales, the driving amplitude σ̂ = σ √(2/τ) of Kelly et al. (2009), for which the long-term variance is σ² = σ̂² τ / 2. That is why σ alone gives poor distances here. σ and τ together do much better only because their errors are strongly correlated and the toy declares τ known to within 0.05 dex, so the fitted τ can correct σ; with a looser τ relation the advantage shrinks and the distances become biased (see below). Set the luminosity to come from σ only to see the difference in the Hubble diagram. For the default survey and sample the σ-only distances are also biased, and their quoted errors are too small and smallest where the distance is most overestimated. The weighted binned means therefore rise with redshift to about 3.5 mag too high (χ² is about twice the degrees of freedom), and the constant-w fit runs to the edge of its scan: a precise-looking result that is wrong.
+      </p>
+      <p>
+        The residual chart shows whether this survey could tell the generating cosmology from ΛCDM: compare the binned means, with their error bars, against the solid curve. The default generating cosmology is close to the DESI 2025 fit with CMB and DES 5-year supernovae (w<sub>0</sub> = −0.75, w<sub>a</sub> = −0.86).
+      </p>
+      <p>
+        The generating universe can be ΛCDM, wCDM or CPL (w<sub>0</sub>w<sub>a</sub>CDM). A slider the model fixes is
+        greyed out, and the marks under the others are the Planck 2018 and DESI DR2 fits for that model; their values, data
+        combinations and sources are tabulated on the <a href="/projects/dark-energy/">dark energy explorer</a>.
+        H<sub>0</sub> stays at 70 km/s/Mpc in every model, so the fits' own H<sub>0</sub> values are not used.
+      </p>
+
+      <h2>How weak the indicator is</h2>
+      <p>
+        The σ relation is shallow. Its slope of 0.09 dex per magnitude means that an error of 0.05 dex in σ (12 per cent) is an error of 0.05 / 0.09 ≈ 0.56 mag in M, and so in μ. With the default intrinsic scatter of 0.05 dex in each relation and the toy τ slope, even a perfectly measured AGN gives μ only to 0.42 mag; with the default survey the simulation gives 0.52 mag per AGN on average over samples (0.56 mag for the sample the page opens with). A type Ia supernova gives about 0.15 mag, so in this toy about (0.52 / 0.15)² ≈ 12 AGN carry the distance information of one supernova. That number belongs to the toy, not to real AGN. It rests on two invented assumptions: the τ slope, and above all a τ relation with only 0.05 dex of scatter, which lets the fitted τ correct the σ it was traded against. With 0.15 dex of τ scatter the per-AGN scatter grows to 0.78 mag and the distances come out 0.2 mag too large; with 0.3 dex, to 1.3 mag and 0.6 mag. With σ alone the default survey gives 2.9 mag. With b<sub>τ</sub> = 0, when τ says nothing about luminosity, using both still narrows the scatter (0.72 against 2.2 mag), because the toy states that every AGN's τ lies within 0.05 dex of 200 days. But those distances are biased by 0.12 mag, and the 1σ range of w contains −1 in only about 7 per cent of samples. Real AGN offer no such guarantee.
+      </p>
+
+      <h2>How honest the error bars are</h2>
+      <p>
+        Measured from 400 simulated samples of each survey, each with a different random seed (300 AGN, 3-day cadence, distances from σ and τ, a ΛCDM generating universe, constant w fitted), with no correction applied on this page:
+      </p>
+      <ul>
+        <li>
+          <strong>10 years, 0.02 mag errors (the default).</strong> Averaged over the samples, the median survey covers 3.7 observed damping times and about 5 per cent of the fits leave τ unconstrained; the sample the page opens with has 4.0 and 20 of 300. The distance moduli come out too large by 0.040 mag on average, rising from 0.013 mag at z ≈ 0.5 to 0.074 mag at z ≈ 3.5: fits of short light curves are biased, and the net effect here is that the AGN look more luminous and so farther away than they are, more so at high redshift where time dilation shortens the light curve in units of τ<sub>obs</sub>. The quoted errors match the actual scatter (the standard deviation of the pulls is 1.00). The 1σ range of the constant-w fit contains w = −1 in about 62 per cent of samples (247 of 400; 68 per cent would be exact), and the best fits average −1.05: the distance bias pulls w low by about half its 1σ error.
+        </li>
+        <li>
+          <strong>3 years, 0.02 mag errors.</strong> On average the median survey covers 1.1 damping times and 20 per cent of fits leave τ unconstrained. The bias is 0.25 mag, from 0.11 mag at z ≈ 0.5 to 0.43 mag at z ≈ 3.5, and the actual scatter is 1.14 times the quoted errors. The 1σ range of w contained the true w = −1 in only 3 of 400 samples; the best fits averaged −1.42.
+        </li>
+        <li>
+          <strong>10 years, 0.10 mag errors (the largest).</strong> The bias is 0.30 mag, from 0.15 to 0.47 mag across the redshift range, the scatter is 1.08 times the quoted errors, and the 1σ range of w contained w = −1 in 17 of 400 samples, with best fits averaging −1.32.
+        </li>
+        <li>
+          For a single light curve 50 to 100 times longer than τ<sub>obs</sub> the fit recovers σ and τ with no bias above 0.01 dex and its errors match the scatter (pull standard deviations about 1). At 10 τ<sub>obs</sub> the actual scatter is about 1.15 times the quoted errors; at 3 τ<sub>obs</sub>, 1.4 to 1.6 times; at 1 τ<sub>obs</sub>, 2.0 to 2.3 times, and σ and τ come out low on average, by roughly 0.1 and 0.2 dex (τ about twice σ in dex, along the likelihood ridge); the exact amount depends on the sampling and on whether fits with τ on its bound are counted.
+        </li>
+      </ul>
+
+      <h2>What is real and what is a toy</h2>
+      <ul>
+        <li>
+          <strong>Real:</strong> AGN optical light curves are well described by a damped random walk (an Ornstein–Uhlenbeck process) with a damping time of a few hundred days in the rest frame (Kelly et al. 2009; MacLeod et al. 2010). The light curves here are sampled exactly from that process, with intervals converted to the rest frame by dividing by 1 + z. σ is the long-term rms; the asymptotic structure function is SF<sub>∞</sub> = √2 σ. More luminous AGN vary less: MacLeod et al. (2010, Table 1) fit log SF<sub>∞</sub> against rest wavelength, absolute i-band magnitude and black hole mass, and find a luminosity coefficient of 0.131 ± 0.008 dex per magnitude at fixed black hole mass and wavelength, and 0.090 ± 0.003 when black hole mass is left out. A relation in luminosity alone corresponds to the second; since σ is SF<sub>∞</sub> / √2, the slope is the same for σ. Measuring τ from light curves only a few τ long is hard, as above. The distances come from a flat universe with matter and w<sub>0</sub>w<sub>a</sub> dark energy (Chevallier &amp; Polarski 2001; Linder 2003).
+        </li>
+        <li>
+          <strong>Toy:</strong> the relations log<sub>10</sub>(σ/mag) = log<sub>10</sub> 0.141 + 0.090 (M + 23) and log<sub>10</sub>(τ/day) = log<sub>10</sub> 200 + b<sub>τ</sub> (M + 23), each with its own adjustable Gaussian scatter, are taken as exact, with known zero-points; real relations also depend on wavelength and black hole mass. The τ slope is invented for this exercise so that τ carries distance information (by default b<sub>τ</sub> = −0.08: more luminous AGN flicker more slowly). MacLeod et al. (2010) find τ nearly independent of luminosity (a coefficient of 0.03 ± 0.04 at fixed black hole mass, −0.01 ± 0.02 without it), which b<sub>τ</sub> = 0 reproduces. Redshifts are uniform between 0.2 and 4; absolute magnitudes are uniform between −28 and the brighter of −22 and the flux limit m = 23, with the limit applied using distances in ΛCDM with Ω<sub>m</sub> = 0.3, so that changing the generating cosmology moves the AGN in apparent magnitude without changing them. Observations are evenly spaced with no seasonal gaps, and the photometric error is the same for every epoch and known. There are no K-corrections, extinction, host galaxy light, emission line contamination or selection effects beyond the flux limit.
+        </li>
+        <li>
+          <strong>The fit:</strong> for each light curve, the exact Gaussian likelihood of a damped random walk plus the photometric noise, with the unknown mean magnitude integrated out against a flat prior, computed by a Kalman filter. It is maximised over ln σ and ln τ<sub>obs</sub>, with τ<sub>obs</sub> allowed from half the cadence to ten times the survey length, and the errors come from the curvature of the likelihood at its maximum. Where the maximum lies on a bound of τ, or the curvature is not that of a peak, τ is marked unconstrained and given an error spanning the whole allowed range; such AGN are kept, not dropped, because dropping them by their measured values would bias the sample.
+        </li>
+        <li>
+          <strong>Luminosity:</strong> with d = (log<sub>10</sub> σ̂ − a<sub>σ</sub>, log<sub>10</sub> τ̂ − a<sub>τ</sub>), b = (b<sub>σ</sub>, b<sub>τ</sub>) and W the inverse of the measurement covariance plus the intrinsic scatter, the generalised least squares estimate is M̂ = −23 + bᵀWd / bᵀWb, with variance 1 / bᵀWb. Then μ̂ = m − M̂, with the error of the fitted mean magnitude added.
+        </li>
+        <li>
+          <strong>The cosmology fit</strong> uses the distances from whichever indicator is selected. With wCDM it varies a constant w with w<sub>a</sub> = 0, Ω<sub>m</sub> at its generating value and the zero-points of the relations assumed known, by a χ² scan with inverse-variance weights over −3 ≤ w ≤ 1; the range is where χ² is within 1 of its minimum. With ΛCDM nothing is fitted: the χ² is that of the data against ΛCDM with the generating Ω<sub>m</sub>, with one degree of freedom per AGN. There is no w<sub>0</sub>w<sub>a</sub> fit: w<sub>0</sub> and w<sub>a</sub> are strongly degenerate for distances alone, and a fair two-parameter fit would need its own contour plot. In a real analysis the absolute calibration is degenerate with H<sub>0</sub> and would be fitted together with Ω<sub>m</sub>, which widens the range.
+        </li>
+      </ul>
+      <p>
+        For an actual measurement of a variability-luminosity relation and the Hubble diagram it gives, with real data, see Dutra, Burke, Natarajan &amp; Yu (2025), <a href={`https://arxiv.org/abs/${arxiv}`}>arXiv:{arxiv}</a>; nothing on this page reproduces that paper's method, relation or data.
+      </p>
+
+      <h2>References</h2>
+      <ul>
+        <li>Kelly, B. C., Bechtold, J. &amp; Siemiginowska, A. 2009, ApJ, 698, 895</li>
+        <li>MacLeod, C. L. et al. 2010, ApJ, 721, 1014</li>
+        <li>Kozłowski, S. 2017, A&amp;A, 597, A128</li>
+        <li>Chevallier, M. &amp; Polarski, D. 2001, Int. J. Mod. Phys. D, 10, 213</li>
+        <li>Linder, E. V. 2003, Phys. Rev. Lett., 90, 091301</li>
+        <li>DESI Collaboration 2025, arXiv:2503.14738</li>
+      </ul>
+    </div>
+  </div>
+</Base>
+
+<script>
+  import { Plot, SERIES } from '../../lib/plot';
+  import { Universe, withLambda, type CPLParams } from '../../lib/cpl';
+  import {
+    F,
+    FIELDS,
+    Z_MAX,
+    binMeans,
+    fitConstantW,
+    fitPopulation,
+    lightCurve,
+    makePopulation,
+    measure,
+    relationSigma,
+    relationTau,
+    type Measurement,
+    type Population,
+    type SurveyParams,
+    type WFit,
+  } from '../../lib/agn';
+  import type { FitJob, FitMessage } from '../../lib/agn-worker';
+  import { setFrozen, setMarks, type Mark } from '../../lib/controls';
+
+  interface State extends Omit<SurveyParams, 'seed'> {
+    omegaM: number;
+    w0: number;
+    wa: number;
+  }
+  type Key = keyof State;
+  const SURVEY_KEYS = ['count', 'years', 'cadence', 'photErr', 'scatterSigma', 'scatterTau', 'bTau'] as const;
+
+  const DEFAULTS: State = {
+    count: 300,
+    years: 10,
+    cadence: 3,
+    photErr: 0.02,
+    scatterSigma: 0.05,
+    scatterTau: 0.05,
+    bTau: -0.08,
+    omegaM: 0.3,
+    w0: -0.75,
+    wa: -0.86,
+  };
+  const H0 = 70;
+
+  // --- the generating model and the published fits it marks ---------------------------
+  type ModelId = 'lcdm' | 'wcdm' | 'cpl';
+  type Marked = 'omegaM' | 'w0' | 'wa';
+  const MODEL_NAME: Record<ModelId, string> = { lcdm: 'ΛCDM', wcdm: 'wCDM', cpl: 'CPL' };
+  const FIXED: Record<ModelId, Partial<Record<'w0' | 'wa', [number, string]>>> = {
+    lcdm: { w0: [-1, 'Fixed at −1 in ΛCDM'], wa: [0, 'Fixed at 0 in ΛCDM'] },
+    wcdm: { wa: [0, 'Fixed at 0: w does not evolve in wCDM'] },
+    cpl: {},
+  };
+  /** Each model's w0 and wa when first selected; afterwards each model remembers its own. */
+  const START_W: Record<ModelId, { w0: number; wa: number }> = {
+    lcdm: { w0: -1, wa: 0 },
+    wcdm: { w0: -0.9, wa: 0 },
+    cpl: { w0: -0.75, wa: -0.86 },
+  };
+  const DEFAULT_MODEL: ModelId = 'cpl';
+  // Marginalised posterior means and 68% intervals. Planck: Planck Collaboration VI 2020 (arXiv:1807.06209);
+  // DESI: DESI Collaboration 2025 (arXiv:2503.14738). The table on /projects/dark-energy/ lists them with H0.
+  const PLANCK = 'Planck Collaboration VI 2020 (arXiv:1807.06209)';
+  const DESI = 'DESI Collaboration 2025 (arXiv:2503.14738)';
+  interface Published {
+    survey: string;
+    label: string;
+    data: string;
+    source: string;
+    values: Partial<Record<Marked, [number, string]>>;
+  }
+  const PUBLISHED: Record<ModelId, Published[]> = {
+    lcdm: [
+      { survey: 'Planck 2018', label: 'Planck', data: 'Planck TT,TE,EE+lowE+lensing', source: `${PLANCK}, Table 2`, values: { omegaM: [0.3153, '± 0.0073'] } },
+      { survey: 'DESI DR2', label: 'DESI', data: 'DESI BAO + CMB', source: `${DESI}, Table 5`, values: { omegaM: [0.3027, '± 0.0036'] } },
+    ],
+    wcdm: [
+      { survey: 'Planck 2018', label: 'Planck', data: 'Planck TT,TE,EE+lowE+lensing + SNe + BAO', source: `${PLANCK}, Eq. 50`, values: { w0: [-1.028, '± 0.031'] } },
+      {
+        survey: 'DESI DR2',
+        label: 'DESI',
+        data: 'DESI BAO + CMB + DESY5',
+        source: `${DESI}, Table 5`,
+        values: { omegaM: [0.3098, '± 0.0050'], w0: [-0.971, '± 0.021'] },
+      },
+    ],
+    cpl: [
+      {
+        survey: 'Planck 2018',
+        label: 'Planck',
+        data: 'Planck TT,TE,EE+lowE+lensing + SNe + BAO',
+        source: `${PLANCK}, Table 6`,
+        values: { w0: [-0.957, '± 0.080'], wa: [-0.29, '+0.32 −0.26'] },
+      },
+      {
+        survey: 'DESI DR2',
+        label: 'DESI',
+        data: 'DESI BAO + CMB + DESY5',
+        source: `${DESI}, Table 5`,
+        values: { omegaM: [0.3191, '± 0.0056'], w0: [-0.752, '± 0.057'], wa: [-0.86, '+0.23 −0.20'] },
+      },
+    ],
+  };
+  const SYMBOL: Record<Marked, string> = { omegaM: 'Ωm', w0: 'w0', wa: 'wa' };
+  /**
+   * Marks closer than this fraction of the track get their labels on two lines. The labels are about
+   * 35 px ("Planck") and 24 px ("DESI") wide and the track in the 300 px panel about 246 px, so two
+   * labels side by side need their centres 0.14 of the track apart.
+   */
+  const CROWDED = 0.15;
+
+  /** setMarks, then moves every other label of a crowded pair to a second line. */
+  function placeMarks(input: HTMLInputElement, marks: Mark[]) {
+    setMarks(input, marks);
+    const buttons = Array.from(input.closest('.tool-row')?.querySelectorAll<HTMLElement>('.tool-mark') ?? []);
+    const at = (b: HTMLElement) => Number(b.style.getPropertyValue('--at'));
+    buttons.sort((a, b) => at(a) - at(b));
+    for (let i = 1; i < buttons.length; i++) {
+      const prev = buttons[i - 1];
+      if (!prev.classList.contains('agn-mark-low') && at(buttons[i]) - at(prev) < CROWDED) buttons[i].classList.add('agn-mark-low');
+    }
+  }
+  /** Wait this long after the last change of a survey control before refitting. */
+  const DEBOUNCE_MS = 150;
+
+  const minus = (s: string) => s.replace(/^-/, '−');
+  const fixed = (v: number, d: number) => minus((Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toFixed(d));
+  const signed = (v: number, d: number) => (v > 0 ? '+' : '') + fixed(v, d);
+  const days = (v: number) => (v >= 100 ? v.toFixed(0) : v.toPrecision(2));
+
+  const FORMAT: Record<Key, (v: number) => string> = {
+    count: (v) => String(v),
+    years: (v) => `${v.toFixed(1)} yr`,
+    cadence: (v) => `${v} d`,
+    photErr: (v) => `${v.toFixed(3)} mag`,
+    scatterSigma: (v) => `${v.toFixed(2)} dex`,
+    scatterTau: (v) => `${v.toFixed(2)} dex`,
+    bTau: (v) => `${fixed(v, 2)} dex/mag`,
+    omegaM: (v) => v.toFixed(4),
+    w0: (v) => fixed(v, 3),
+    wa: (v) => fixed(v, 2),
+  };
+
+  // The same colour for the same thing on every chart.
+  const TRUE = { color: SERIES[0], width: 2.2 };
+  const LCDM = { color: SERIES[1], width: 1.8, dash: [6, 4] };
+  const BINS = SERIES[2];
+  const SELECTED = SERIES[3];
+  const FIT = { color: SERIES[4], width: 1.6 };
+  const pick = (steps: number[], need: number) => steps.find((s) => s >= need) ?? Math.ceil(need);
+
+  type Corner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+  /**
+   * The legend corner whose box (the size plot.ts draws it, plus a few pixels)
+   * covers the fewest of the given points, in data coordinates; ties go to the
+   * earlier corner in top-left, top-right, bottom-left, bottom-right order.
+   */
+  function legendCorner(p: Plot, entries: { label: string }[], points: [number, number][]): Corner {
+    const ctx = p.canvas.getContext('2d')!;
+    ctx.font = `500 12px ${p.theme.font}`;
+    const w = Math.max(...entries.map((e) => ctx.measureText(e.label).width)) + 44 + 12;
+    const h = 18 * entries.length + 6 + 12;
+    const [x0, x1] = [p.px(p.x.min), p.px(p.x.max)];
+    const [y0, y1] = [p.py(p.y.max), p.py(p.y.min)];
+    let best: Corner = 'top-left';
+    let fewest = Infinity;
+    for (const c of ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const) {
+      const left = c.endsWith('left') ? x0 : x1 - w;
+      const top = c.startsWith('top') ? y0 : y1 - h;
+      let covered = 0;
+      for (const [x, y] of points) {
+        const [px, py] = [p.px(x), p.py(y)];
+        if (px >= left - 6 && px <= left + w + 6 && py >= top - 6 && py <= top + h + 6) covered++;
+      }
+      if (covered < fewest) {
+        best = c;
+        fewest = covered;
+      }
+    }
+    return best;
+  }
+
+  function init(root: HTMLElement) {
+    const panel = root.querySelector<HTMLFormElement>('.tool-panel')!;
+    const caption = root.querySelector<HTMLElement>('[data-caption]')!;
+    const status = root.querySelector<HTMLElement>('[data-status]')!;
+    const canvas = (name: string) => root.querySelector<HTMLCanvasElement>(`[data-plot="${name}"]`)!;
+
+    let state: State = { ...DEFAULTS };
+    let seed = 1;
+    let selected = 0;
+
+    // The current survey and its fits, filled in as slices arrive.
+    let pop!: Population;
+    let fits = new Float64Array(0);
+    let done = new Uint8Array(0);
+    let fitted = 0;
+    let job = 0;
+    let jobStart = 0;
+    let jobMs = NaN;
+    let meas!: Measurement;
+    let fit: WFit | null = null;
+    let curve: Float64Array = new Float64Array(0);
+
+    // The choices that never refit: the generating model, the distance indicator and the fitted model.
+    let genModel: ModelId = DEFAULT_MODEL;
+    let remembered = structuredClone(START_W);
+    let indicator: 'sigma' | 'both' = 'both';
+    let fitModel: 'lcdm' | 'wcdm' = 'wcdm';
+    // The distance moduli the Hubble diagram shows (from σ alone, or from σ and τ), with their summary.
+    let mu: Float64Array = new Float64Array(0);
+    let muErr: Float64Array = new Float64Array(0);
+    let bias = NaN;
+    /** Inverse-variance weighted mean of μ̂ − μ_true: the weighting the cosmology fit and the binned means use. */
+    let weightedBias = NaN;
+    let spread = NaN;
+    let lcdmChi2: { chi2: number; dof: number } | null = null;
+    const cosmology = (): CPLParams => ({ h0: H0, omegaM: state.omegaM, w0: state.w0, wa: state.wa });
+    const surveyParams = (): SurveyParams => ({
+      count: state.count,
+      years: state.years,
+      cadence: state.cadence,
+      photErr: state.photErr,
+      scatterSigma: state.scatterSigma,
+      scatterTau: state.scatterTau,
+      bTau: state.bTau,
+      seed,
+    });
+
+    // Model curves on a redshift grid, rebuilt in update().
+    const GRID = 200;
+    const zGrid = Float64Array.from({ length: GRID }, (_, i) => 0.02 + (i * (Z_MAX + 0.2 - 0.02)) / (GRID - 1));
+    const lines = {
+      muTrue: new Float64Array(GRID),
+      muLCDM: new Float64Array(GRID),
+      resTrue: new Float64Array(GRID),
+      resFit: new Float64Array(GRID),
+    };
+    let residuals = new Float64Array(0);
+    let muLow = 40; // μ at the lowest redshift in the sample, z = 0.2
+    // Per-object columns for the charts: fitted σ and τ, split by whether τ was constrained.
+    let sigmaFit = new Float64Array(0);
+    let tauFit = new Float64Array(0);
+    let good = new Uint8Array(0);
+    let loose = new Uint8Array(0);
+
+    const plots = {
+      lc: new Plot(canvas('lc'), { x: { min: 0, max: 3650, label: 'Observed time (days)' }, y: { min: 20, max: 19, label: 'Magnitude' } }),
+      sigma: new Plot(canvas('sigma'), {
+        x: { min: -28.5, max: -21.5, label: 'True absolute magnitude M' },
+        y: { min: 0.01, max: 3, log: true, label: 'Fitted σ (mag)' },
+      }),
+      tau: new Plot(canvas('tau'), {
+        x: { min: -28.5, max: -21.5, label: 'True absolute magnitude M' },
+        y: { min: 0.1, max: 1e5, log: true, label: 'Fitted τ, rest frame (days)' },
+      }),
+      hubble: new Plot(canvas('hubble'), { x: { min: 0, max: Z_MAX + 0.2, label: 'Redshift z' }, y: { min: 38, max: 50, label: 'μ̂ (mag)' } }),
+      res: new Plot(canvas('res'), { x: { min: 0, max: Z_MAX + 0.2, label: 'Redshift z' }, y: { min: -1, max: 1, label: 'Δμ from ΛCDM (mag)' } }),
+    };
+
+    // --- fitting ---------------------------------------------------------------------------
+    // A module worker does the fits; if it cannot start, the same slices run on
+    // the main thread with a short time budget each.
+    let worker: Worker | null = null;
+    try {
+      worker = new Worker(new URL('../../lib/agn-worker.ts', import.meta.url), { type: 'module' });
+      worker.onmessage = (ev: MessageEvent<FitMessage>) => receive(ev.data);
+      worker.onerror = () => {
+        // Stop the failed worker before the same job restarts on the main thread.
+        worker?.terminate();
+        worker = null;
+        startJob();
+      };
+    } catch {
+      worker = null;
+    }
+
+    function startJob() {
+      job++;
+      const params = surveyParams();
+      pop = makePopulation(params);
+      fits = new Float64Array(params.count * FIELDS).fill(NaN);
+      done = new Uint8Array(params.count);
+      fitted = 0;
+      jobStart = performance.now();
+      jobMs = NaN;
+      if (selected >= params.count) selected = 0;
+      curve = lightCurve(pop, selected);
+      if (worker) {
+        const message: FitJob = { job, params };
+        worker.postMessage(message);
+      } else {
+        const mine = job;
+        const local = pop;
+        void fitPopulation(
+          local,
+          (from, rows) => receive({ type: 'rows', job: mine, from, rows }),
+          () => mine !== job,
+          12,
+        ).then((finished) => {
+          if (finished) receive({ type: 'done', job: mine, ms: performance.now() - jobStart });
+        });
+      }
+      invalidate();
+    }
+
+    function receive(msg: FitMessage) {
+      if (msg.job !== job) return; // a stale job
+      if (msg.type === 'rows') {
+        fits.set(msg.rows, msg.from * FIELDS);
+        const n = msg.rows.length / FIELDS;
+        for (let k = 0; k < n; k++) done[msg.from + k] = 1;
+        fitted += n;
+      } else {
+        jobMs = msg.ms;
+      }
+      invalidate();
+    }
+
+    let debounce = 0;
+    function scheduleJob() {
+      clearTimeout(debounce);
+      status.textContent = 'waiting to refit…';
+      debounce = window.setTimeout(startJob, DEBOUNCE_MS);
+    }
+
+    // --- numbers -------------------------------------------------------------------------
+    const num = (key: string, text: string) => {
+      const el = panel.querySelector(`[data-num="${key}"]`);
+      if (el && el.textContent !== text) el.textContent = text;
+    };
+    const mag = (v: number, d = 2) => (Number.isFinite(v) ? `${fixed(v, d)} mag` : '–');
+
+    function updateNumbers() {
+      const count = pop.z.length;
+      const complete = fitted === count;
+      // The time arrives a moment after the last fits; until then say only that they are done.
+      status.textContent = !complete
+        ? `fitting ${fitted} / ${count}`
+        : Number.isFinite(jobMs)
+          ? `${count} AGN fitted in ${(jobMs / 1000).toFixed(2)} s`
+          : `${count} AGN fitted`;
+      num('spread', mag(spread));
+      num('bias', Number.isFinite(bias) ? `${signed(bias, 3)} mag` : '–');
+      num('wbias', Number.isFinite(weightedBias) ? `${signed(weightedBias, 3)} mag` : '–');
+      num('baseline', Number.isFinite(meas.medianBaseline) ? meas.medianBaseline.toFixed(1) : '–');
+      num('unconstrained', `${meas.unconstrained} of ${meas.fitted}`);
+      num('spreadSigma', mag(meas.spreadSigma));
+      num('spreadBoth', mag(meas.spread));
+      if (fitModel === 'lcdm') {
+        num('fit', 'not fitted (w = −1)');
+        num('fitRange', '–');
+        num('chi2', lcdmChi2 ? `${lcdmChi2.chi2.toFixed(0)} / ${lcdmChi2.dof}` : complete ? '–' : 'after fitting');
+        return;
+      }
+      if (!fit) {
+        const wait = complete ? '–' : 'after fitting';
+        num('fit', wait);
+        num('fitRange', wait);
+        num('chi2', wait);
+        return;
+      }
+      num('fit', fixed(fit.best, 2) + (fit.bestAtEdge ? ' (edge of scan)' : ''));
+      const lo = fit.loAtEdge ? `below ${fixed(fit.lo, 0)}` : fixed(fit.lo, 2);
+      const hi = fit.hiAtEdge ? `above ${fixed(fit.hi, 0)}` : fixed(fit.hi, 2);
+      num('fitRange', fit.loAtEdge || fit.hiAtEdge ? `${lo} to ${hi} (reaches the edge of the scan)` : `${lo} to ${hi}`);
+      num('chi2', `${fit.chi2.toFixed(0)} / ${fit.dof}`);
+    }
+
+    function updateCaption() {
+      const i = selected;
+      const z = pop.z[i];
+      const length = pop.times[pop.times.length - 1];
+      const head =
+        `AGN ${i + 1} of ${pop.z.length}, z = ${z.toFixed(2)}, M = ${fixed(pop.M[i], 1)}; ` +
+        `true σ = ${(10 ** pop.logSigma[i]).toFixed(3)} mag, τ = ${days(10 ** pop.logTau[i])} d (rest)`;
+      const ratio = `; survey length / observed τ = ${(length / pop.tauObs[i]).toFixed(1)}`;
+      if (!done[i]) {
+        caption.textContent = `${head}; not fitted yet${ratio}`;
+        return;
+      }
+      const o = i * FIELDS;
+      const s = 10 ** fits[o + F.LogSigma];
+      const t = 10 ** fits[o + F.LogTau];
+      const bound = fits[o + F.TauBound];
+      const tauText = fits[o + F.Unconstrained]
+        ? `τ unconstrained${bound > 0 ? ' (at the upper bound)' : bound < 0 ? ' (at the lower bound)' : ''}, ${days(t)} d`
+        : `τ = ${days(t)} d ± ${Math.sqrt(fits[o + F.VarTau]).toFixed(2)} dex`;
+      caption.textContent = `${head}; fitted σ = ${s.toFixed(3)} mag ± ${Math.sqrt(fits[o + F.VarSigma]).toFixed(2)} dex, ${tauText}${ratio}`;
+    }
+
+    // --- update ---------------------------------------------------------------------------
+    let queued = false;
+    function invalidate() {
+      if (!queued) {
+        queued = true;
+        requestAnimationFrame(update);
+      }
+    }
+
+    function update() {
+      queued = false;
+      const cosmo = cosmology();
+      meas = measure(pop, fits, done, cosmo);
+      const count = pop.z.length;
+      const sigmaOnly = indicator === 'sigma';
+      mu = sigmaOnly ? meas.muSigma : meas.muEst;
+      muErr = sigmaOnly ? meas.muErrSigma : meas.muErr;
+      spread = sigmaOnly ? meas.spreadSigma : meas.spread;
+      bias = sigmaOnly ? meanDifference(mu, meas.muTrue, done) : meas.bias;
+      weightedBias = weightedMeanDifference(mu, meas.muTrue, muErr, done);
+      const complete = fitted === count;
+      fit = complete && fitModel === 'wcdm' ? fitConstantW(pop.z, mu, muErr, done, cosmo) : null;
+      lcdmChi2 = complete && fitModel === 'lcdm' ? chi2Against(mu, muErr, meas.muLCDM, done) : null;
+
+      const truth = new Universe(cosmo, Z_MAX + 0.3);
+      const lambda = new Universe(withLambda(cosmo), Z_MAX + 0.3);
+      const best = fit ? new Universe({ ...cosmo, w0: fit.best, wa: 0 }, Z_MAX + 0.3) : null;
+      for (let i = 0; i < GRID; i++) {
+        const z = zGrid[i];
+        lines.muTrue[i] = truth.distanceModulus(z);
+        lines.muLCDM[i] = lambda.distanceModulus(z);
+        lines.resTrue[i] = lines.muTrue[i] - lines.muLCDM[i];
+        lines.resFit[i] = best ? best.distanceModulus(z) - lines.muLCDM[i] : NaN;
+      }
+      muLow = truth.distanceModulus(0.2);
+      residuals = Float64Array.from(mu, (v, i) => v - meas.muLCDM[i]);
+      sigmaFit = new Float64Array(count);
+      tauFit = new Float64Array(count);
+      good = new Uint8Array(count);
+      loose = new Uint8Array(count);
+      for (let i = 0; i < count; i++) {
+        sigmaFit[i] = done[i] ? 10 ** fits[i * FIELDS + F.LogSigma] : NaN;
+        tauFit[i] = done[i] ? 10 ** fits[i * FIELDS + F.LogTau] : NaN;
+        const unc = done[i] && fits[i * FIELDS + F.Unconstrained] === 1;
+        good[i] = done[i] && !unc ? 1 : 0;
+        loose[i] = unc ? 1 : 0;
+      }
+
+      updateNumbers();
+      updateCaption();
+      for (const p of Object.values(plots)) p.redraw();
+    }
+
+    /** Mean of a − b over the objects with mask set and both finite. */
+    function meanDifference(a: ArrayLike<number>, b: ArrayLike<number>, mask: Uint8Array): number {
+      let sum = 0;
+      let n = 0;
+      for (let i = 0; i < a.length; i++) {
+        if (!mask[i] || !Number.isFinite(a[i] - b[i])) continue;
+        sum += a[i] - b[i];
+        n++;
+      }
+      return n ? sum / n : NaN;
+    }
+
+    /** Inverse-variance weighted mean of a − b (weights 1/err²) over the objects with mask set. */
+    function weightedMeanDifference(a: ArrayLike<number>, b: ArrayLike<number>, err: ArrayLike<number>, mask: Uint8Array): number {
+      let sw = 0;
+      let swd = 0;
+      for (let i = 0; i < a.length; i++) {
+        const d = a[i] - b[i];
+        if (!mask[i] || !Number.isFinite(d) || !(err[i] > 0)) continue;
+        const w = 1 / (err[i] * err[i]);
+        sw += w;
+        swd += w * d;
+      }
+      return sw > 0 ? swd / sw : NaN;
+    }
+
+    /** χ² of distance moduli against a model with nothing fitted: its degrees of freedom are the number of objects. */
+    function chi2Against(y: ArrayLike<number>, err: ArrayLike<number>, model: ArrayLike<number>, mask: Uint8Array) {
+      let chi2 = 0;
+      let dof = 0;
+      for (let i = 0; i < y.length; i++) {
+        if (!mask[i] || !Number.isFinite(y[i]) || !(err[i] > 0)) continue;
+        chi2 += ((y[i] - model[i]) / err[i]) ** 2;
+        dof++;
+      }
+      return dof ? { chi2, dof } : null;
+    }
+
+    /** The values of ys where mask is set, NaN elsewhere (so the points are skipped). */
+    const masked = (ys: ArrayLike<number>, mask: Uint8Array) => Float64Array.from(mask, (m, i) => (m ? ys[i] : NaN));
+
+    // --- charts ---------------------------------------------------------------------------
+    plots.lc.observe(() => {
+      const p = plots.lc;
+      if (!pop || !curve.length) return p.begin();
+      const t = pop.times;
+      const base = meas ? pop.M[selected] + meas.muTrue[selected] : 0;
+      const mags = Float64Array.from(curve, (v) => base + v);
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const v of mags) {
+        lo = Math.min(lo, v);
+        hi = Math.max(hi, v);
+      }
+      const pad = Math.max(0.05, 0.08 * (hi - lo));
+      // Brighter (smaller magnitude) up: min is the faint end.
+      p.x = { ...p.x, max: t[t.length - 1] || 1 };
+      p.y = { ...p.y, min: Math.ceil((hi + pad) * 20) / 20, max: Math.floor((lo - pad) * 20) / 20 };
+      p.begin();
+      p.points(t, mags, { color: SELECTED, radius: t.length > 600 ? 1.4 : 2, alpha: 0.85 });
+      if (meas && done[selected]) p.rule('y', meas.mObs[selected], { color: p.theme.muted, width: 1, dash: [4, 4] });
+    });
+
+    plots.sigma.observe(() => {
+      const p = plots.sigma;
+      p.begin();
+      if (!pop || !meas) return;
+      p.points(pop.M, masked(sigmaFit, loose), { color: p.theme.muted, radius: 2.2, alpha: 0.18 });
+      p.points(pop.M, masked(sigmaFit, good), { color: p.theme.muted, radius: 2.2, alpha: 0.6 });
+      const Ms = [-28.5, -21.5];
+      p.line(Ms, Ms.map((M) => relationSigma(M, pop.rel)), TRUE);
+      if (done[selected]) p.points([pop.M[selected]], [sigmaFit[selected]], { color: SELECTED, radius: 4.5 });
+      p.legend(
+        [
+          { label: 'Toy relation (truth)', color: SERIES[0] },
+          { label: 'Selected AGN', color: SELECTED },
+        ],
+        'top-left',
+      );
+    });
+
+    plots.tau.observe(() => {
+      const p = plots.tau;
+      p.begin();
+      if (!pop || !meas) return;
+      p.points(pop.M, masked(tauFit, loose), { color: p.theme.muted, radius: 2.2, alpha: 0.18 });
+      p.points(pop.M, masked(tauFit, good), { color: p.theme.muted, radius: 2.2, alpha: 0.6 });
+      const Ms = [-28.5, -21.5];
+      p.line(Ms, Ms.map((M) => relationTau(M, pop.rel)), TRUE);
+      if (done[selected]) p.points([pop.M[selected]], [tauFit[selected]], { color: SELECTED, radius: 4.5, alpha: good[selected] ? 1 : 0.5 });
+      p.legend(
+        [
+          { label: 'Toy relation (truth)', color: SERIES[0] },
+          { label: 'Selected AGN', color: SELECTED },
+        ],
+        'top-left',
+      );
+    });
+
+    plots.hubble.observe(() => {
+      const p = plots.hubble;
+      // A y range that holds the curves and most points, in steps of 2 mag.
+      const lo = Math.floor((muLow - 2) / 2) * 2;
+      const hi = Math.ceil((lines.muTrue[GRID - 1] + 2.5) / 2) * 2;
+      p.y = { ...p.y, min: lo, max: hi };
+      p.begin();
+      if (!pop || !meas) return;
+      p.points(pop.z, masked(mu, loose), { color: p.theme.muted, radius: 2, alpha: 0.18 });
+      p.points(pop.z, masked(mu, good), { color: p.theme.muted, radius: 2, alpha: 0.5 });
+      p.line(zGrid, lines.muLCDM, LCDM);
+      p.line(zGrid, lines.muTrue, TRUE);
+      if (done[selected]) p.points([pop.z[selected]], [mu[selected]], { color: SELECTED, radius: 4.5, yerr: [muErr[selected]] });
+      p.legend(
+        [
+          { label: 'Generating cosmology', color: SERIES[0] },
+          { label: 'ΛCDM, same Ωm', color: SERIES[1], dash: LCDM.dash },
+          { label: 'Selected AGN', color: SELECTED },
+        ],
+        'bottom-right',
+      );
+    });
+
+    plots.res.observe(() => {
+      const p = plots.res;
+      if (!pop || !meas) return p.begin();
+      const bins = binMeans(pop.z, residuals, muErr, done);
+      let need = 0.25;
+      bins.mean.forEach((m, k) => (need = Math.max(need, Math.abs(m) + bins.err[k])));
+      for (const v of lines.resTrue) need = Math.max(need, Math.abs(v));
+      const L = pick([0.25, 0.5, 1, 2, 3, 5], need * 1.15);
+      p.y = { ...p.y, min: -L, max: L };
+      p.begin();
+      p.points(pop.z, masked(residuals, loose), { color: p.theme.muted, radius: 2, alpha: 0.12 });
+      p.points(pop.z, masked(residuals, good), { color: p.theme.muted, radius: 2, alpha: 0.32 });
+      p.line([0, Z_MAX + 0.2], [0, 0], LCDM);
+      p.line(zGrid, lines.resTrue, TRUE);
+      if (fit) p.line(zGrid, lines.resFit, FIT);
+      p.points(bins.z, bins.mean, { color: BINS, radius: 4.5, yerr: bins.err });
+      const entries = [
+        { label: 'Generating cosmology', color: SERIES[0] },
+        { label: fitModel === 'lcdm' ? 'ΛCDM, same Ωm (no fit)' : 'ΛCDM, same Ωm', color: SERIES[1], dash: LCDM.dash },
+        { label: 'Weighted bin mean ± s.e.', color: BINS },
+        ...(fit ? [{ label: `Best constant w = ${fixed(fit.best, 2)}`, color: SERIES[4] }] : []),
+      ];
+      // The legend goes in the corner that covers the fewest plotted points; binned means count five times.
+      const points: [number, number][] = [];
+      for (let i = 0; i < residuals.length; i++) if (done[i]) points.push([pop.z[i], residuals[i]]);
+      bins.z.forEach((z, k) => {
+        for (let j = 0; j < 5; j++) points.push([z, bins.mean[k]]);
+      });
+      p.legend(entries, legendCorner(p, entries, points));
+    });
+
+    // Clicking near a point in the Hubble diagram selects that AGN.
+    canvas('hubble').addEventListener('click', (ev) => {
+      if (!pop || !meas) return;
+      const p = plots.hubble;
+      const rect = p.canvas.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+      let best = -1;
+      let bestD = 14; // CSS pixels
+      for (let i = 0; i < pop.z.length; i++) {
+        if (!done[i] || !Number.isFinite(mu[i])) continue;
+        const d = Math.hypot(p.px(pop.z[i]) - x, p.py(mu[i]) - y);
+        if (d < bestD) {
+          bestD = d;
+          best = i;
+        }
+      }
+      if (best >= 0) select(best);
+    });
+
+    function select(i: number) {
+      selected = i;
+      curve = lightCurve(pop, selected);
+      updateCaption();
+      for (const p of Object.values(plots)) p.redraw();
+    }
+
+    // --- controls --------------------------------------------------------------------------
+    const inputs = Array.from(panel.querySelectorAll<HTMLInputElement>('[data-param]'));
+    const slider = (key: Key) => inputs.find((i) => i.dataset.param === key)!;
+    const radios = (name: string) => Array.from(panel.querySelectorAll<HTMLInputElement>(`input[name="${name}"]`));
+    const modelRadios = radios('agn-model');
+    const indicatorRadios = radios('agn-indicator');
+    const fitRadios = radios('agn-fit');
+    const sigmaNote = panel.querySelector<HTMLElement>('[data-sigma-note]')!;
+
+    /** Shows the three choices: freezes what they fix and marks the published fits of the generating model. */
+    function applyChoices() {
+      for (const r of modelRadios) r.checked = r.value === genModel;
+      for (const r of indicatorRadios) r.checked = r.value === indicator;
+      for (const r of fitRadios) r.checked = r.value === fitModel;
+      const rules = FIXED[genModel];
+      for (const key of ['w0', 'wa'] as const) {
+        const rule = rules[key];
+        if (rule) state[key] = rule[0];
+        setFrozen(slider(key), Boolean(rule), rule?.[1]);
+      }
+      for (const key of ['omegaM', 'w0', 'wa'] as const) {
+        const frozen = key !== 'omegaM' && Boolean(rules[key]);
+        const marks: Mark[] = frozen
+          ? []
+          : PUBLISHED[genModel].flatMap((f) => {
+              const entry = f.values[key];
+              if (!entry) return [];
+              const [v, err] = entry;
+              const title = `${f.survey} ${MODEL_NAME[genModel]} fit, ${f.data}: ${SYMBOL[key]} = ${minus(String(v))} ${err}. ${f.source}; posterior mean and 68% interval.`;
+              return [{ value: v, label: f.label, title }];
+            });
+        placeMarks(slider(key), marks);
+      }
+      const sigmaOnly = indicator === 'sigma';
+      sigmaNote.hidden = !sigmaOnly;
+      for (const el of root.querySelectorAll('[data-indicator]')) el.textContent = sigmaOnly ? 'σ only' : 'σ and τ';
+    }
+
+    // None of these refit: they only change which distances are drawn and compared.
+    for (const r of modelRadios) {
+      r.addEventListener('change', () => {
+        if (!r.checked) return;
+        remembered[genModel] = { w0: state.w0, wa: state.wa };
+        genModel = r.value as ModelId;
+        state.w0 = remembered[genModel].w0;
+        state.wa = remembered[genModel].wa;
+        applyChoices();
+        sync();
+        invalidate();
+      });
+    }
+    for (const r of indicatorRadios) {
+      r.addEventListener('change', () => {
+        if (!r.checked) return;
+        indicator = r.value as typeof indicator;
+        applyChoices();
+        invalidate();
+      });
+    }
+    for (const r of fitRadios) {
+      r.addEventListener('change', () => {
+        if (!r.checked) return;
+        fitModel = r.value as typeof fitModel;
+        applyChoices();
+        invalidate();
+      });
+    }
+
+    function sync() {
+      for (const input of inputs) {
+        const key = input.dataset.param as Key;
+        input.value = String(state[key]);
+        panel.querySelector(`[data-out="${key}"]`)!.textContent = FORMAT[key](state[key]);
+      }
+    }
+
+    panel.addEventListener('input', (ev) => {
+      const input = ev.target as HTMLInputElement;
+      const key = input.dataset.param as Key | undefined;
+      if (!key) return;
+      state[key] = Number(input.value);
+      sync();
+      if ((SURVEY_KEYS as readonly string[]).includes(key)) scheduleJob();
+      else invalidate(); // the cosmology: new distances, no refit
+    });
+    panel.addEventListener('click', (ev) => {
+      const action = (ev.target as HTMLElement).closest<HTMLButtonElement>('[data-action]')?.dataset.action;
+      if (action === 'sample') {
+        seed = (seed % 1000000) + 1;
+        startJob();
+      } else if (action === 'next') {
+        select((selected + 1) % pop.z.length);
+      } else if (action === 'reset') {
+        const survey = SURVEY_KEYS.some((k) => state[k] !== DEFAULTS[k]) || seed !== 1;
+        state = { ...DEFAULTS };
+        seed = 1;
+        selected = 0;
+        genModel = DEFAULT_MODEL;
+        remembered = structuredClone(START_W);
+        indicator = 'both';
+        fitModel = 'wcdm';
+        applyChoices();
+        sync();
+        if (survey) startJob();
+        else select(0);
+        invalidate();
+      }
+    });
+
+    applyChoices();
+    sync();
+    startJob();
+  }
+
+  document.querySelectorAll<HTMLElement>('[data-agn]').forEach(init);
+</script>
+
+<style>
+  .agn-figures {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  }
+  .agn-wide {
+    grid-column: 1 / -1;
+  }
+  .agn-note,
+  .agn-status {
+    margin: 0;
+    color: var(--muted);
+  }
+  .agn-status {
+    font-variant-numeric: tabular-nums;
+  }
+  .agn-label {
+    margin-bottom: -6px;
+  }
+  /* Two published values close together on one slider: the second label drops to a second line (its tick stays short, so it does not cross the first label). */
+  :global(.tool-marks:has(.agn-mark-low)) {
+    height: 40px;
+  }
+  :global(.tool-mark.agn-mark-low) {
+    padding-top: 21px;
+  }
+  .agn-click {
+    cursor: pointer;
+  }
+  .tool-figure [data-caption] {
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+  .tool-notes ul {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding-left: 1.2em;
+  }
+  @media (max-width: 520px) {
+    .tool-figure canvas {
+      height: 250px;
+    }
+  }
+</style>
